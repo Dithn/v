@@ -1,22 +1,16 @@
 module picohttpparser
 
 pub struct Response {
-	fd        int
+	fd int
 pub:
-	date      byteptr
-	buf_start byteptr
+	date      &byte = 0
+	buf_start &byte = 0
 pub mut:
-	buf       byteptr
+	buf &byte = 0
 }
 
 [inline]
-[deprecated: 'use Response.write_string() instead']
-pub fn (mut r Response) write_str(s string) {
-	r.write_string(s)
-}
-
-[inline]
-fn (mut r Response) write_string(s string) {
+pub fn (mut r Response) write_string(s string) {
 	unsafe {
 		C.memcpy(r.buf, s.str, s.len)
 		r.buf += s.len
@@ -26,7 +20,7 @@ fn (mut r Response) write_string(s string) {
 [inline]
 pub fn (mut r Response) http_ok() &Response {
 	r.write_string('HTTP/1.1 200 OK\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
@@ -35,7 +29,7 @@ pub fn (mut r Response) header(k string, v string) &Response {
 	r.write_string(': ')
 	r.write_string(v)
 	r.write_string('\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
@@ -45,13 +39,13 @@ pub fn (mut r Response) header_date() &Response {
 		r.buf += cpy(r.buf, r.date, 29)
 	}
 	r.write_string('\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
 pub fn (mut r Response) header_server() &Response {
 	r.write_string('Server: V\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
@@ -59,25 +53,25 @@ pub fn (mut r Response) content_type(s string) &Response {
 	r.write_string('Content-Type: ')
 	r.write_string(s)
 	r.write_string('\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
 pub fn (mut r Response) html() &Response {
 	r.write_string('Content-Type: text/html\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
 pub fn (mut r Response) plain() &Response {
 	r.write_string('Content-Type: text/plain\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]
 pub fn (mut r Response) json() &Response {
 	r.write_string('Content-Type: application/json\r\n')
-	return r
+	return unsafe { r }
 }
 
 [inline]

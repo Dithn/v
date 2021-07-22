@@ -18,10 +18,16 @@ pub fn (prefs &Preferences) should_compile_filtered_files(dir string, files_ []s
 		if prefs.backend == .c && !prefs.should_compile_c(file) {
 			continue
 		}
-		if prefs.backend == .js && !prefs.should_compile_js(file) {
+		if prefs.backend.is_js() && !prefs.should_compile_js(file) {
 			continue
 		}
-		if prefs.backend != .js && !prefs.should_compile_asm(file) {
+		if prefs.backend == .native && !prefs.should_compile_native(file) {
+			continue
+		}
+		if !prefs.backend.is_js() && !prefs.should_compile_asm(file) {
+			continue
+		}
+		if file.starts_with('.#') {
 			continue
 		}
 		if file.contains('_d_') {
@@ -80,6 +86,7 @@ pub fn (prefs &Preferences) should_compile_filtered_files(dir string, files_ []s
 		res << file
 	}
 	if prefs.is_verbose {
+		// println('>>> prefs: $prefs')
 		println('>>> should_compile_filtered_files: res: $res')
 	}
 	return res
@@ -109,10 +116,16 @@ fn fname_without_platform_postfix(file string) string {
 		'_',
 		'solaris.c.v',
 		'_',
-		'x64.v',
+		'native.v',
 		'_',
 	])
 	return res
+}
+
+pub fn (prefs &Preferences) should_compile_native(file string) bool {
+	// allow custom filtering for native backends,
+	// but if there are no other rules, default to the c backend rules
+	return prefs.should_compile_c(file)
 }
 
 pub fn (prefs &Preferences) should_compile_c(file string) bool {
@@ -126,7 +139,7 @@ pub fn (prefs &Preferences) should_compile_c(file string) bool {
 	if prefs.os == .all {
 		return true
 	}
-	if prefs.backend != .x64 && file.ends_with('_x64.v') {
+	if prefs.backend != .native && file.ends_with('_native.v') {
 		return false
 	}
 	if prefs.os != .windows && (file.ends_with('_windows.c.v') || file.ends_with('_windows.v')) {
@@ -166,6 +179,12 @@ pub fn (prefs &Preferences) should_compile_c(file string) bool {
 		return false
 	}
 	if prefs.os != .solaris && file.ends_with('_solaris.c.v') {
+		return false
+	}
+	if prefs.os != .serenity && file.ends_with('_serenity.c.v') {
+		return false
+	}
+	if prefs.os != .vinix && file.ends_with('_vinix.c.v') {
 		return false
 	}
 	return true

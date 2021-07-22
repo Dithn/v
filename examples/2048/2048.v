@@ -127,8 +127,8 @@ struct Perf {
 mut:
 	frame     int
 	frame_old int
-	frame_sw  time.StopWatch = time.new_stopwatch({})
-	second_sw time.StopWatch = time.new_stopwatch({})
+	frame_sw  time.StopWatch = time.new_stopwatch()
+	second_sw time.StopWatch = time.new_stopwatch()
 }
 
 struct Pos {
@@ -450,12 +450,11 @@ fn (p Prediction) str() string {
 fn (mut app App) ai_move() {
 	mut predictions := [4]Prediction{}
 	mut is_valid := false
-	think_watch := time.new_stopwatch({})
+	think_watch := time.new_stopwatch()
 	for move in possible_moves {
 		move_idx := int(move)
 		predictions[move_idx].move = move
 		mut mpoints := 0
-		mut mshifts := 0
 		mut mcmoves := 0
 		for _ in 0 .. predictions_per_move {
 			mut cboard := app.board
@@ -479,7 +478,6 @@ fn (mut app App) ai_move() {
 				}
 			}
 			mpoints += cboard.points
-			mshifts += cboard.shifts
 			mcmoves += cmoves
 		}
 		predictions[move_idx].mpoints = f64(mpoints) / predictions_per_move
@@ -501,21 +499,21 @@ fn (mut app App) ai_move() {
 fn (app &App) label_format(kind LabelKind) gx.TextCfg {
 	match kind {
 		.points {
-			return {
+			return gx.TextCfg{
 				color: if app.state in [.over, .victory] { gx.white } else { app.theme.text_color }
 				align: .left
 				size: app.ui.font_size / 2
 			}
 		}
 		.moves {
-			return {
+			return gx.TextCfg{
 				color: if app.state in [.over, .victory] { gx.white } else { app.theme.text_color }
 				align: .right
 				size: app.ui.font_size / 2
 			}
 		}
 		.tile {
-			return {
+			return gx.TextCfg{
 				color: app.theme.text_color
 				align: .center
 				vertical_align: .middle
@@ -523,7 +521,7 @@ fn (app &App) label_format(kind LabelKind) gx.TextCfg {
 			}
 		}
 		.victory {
-			return {
+			return gx.TextCfg{
 				color: app.theme.victory_color
 				align: .center
 				vertical_align: .middle
@@ -531,7 +529,7 @@ fn (app &App) label_format(kind LabelKind) gx.TextCfg {
 			}
 		}
 		.game_over {
-			return {
+			return gx.TextCfg{
 				color: app.theme.game_over_color
 				align: .center
 				vertical_align: .middle
@@ -539,7 +537,7 @@ fn (app &App) label_format(kind LabelKind) gx.TextCfg {
 			}
 		}
 		.score_end {
-			return {
+			return gx.TextCfg{
 				color: gx.white
 				align: .center
 				vertical_align: .middle
@@ -625,7 +623,7 @@ fn (app &App) draw_tiles() {
 	toffset := app.ui.tile_size + app.ui.padding_size
 	tiles_size := mu.min(app.ui.window_width, app.ui.window_height) - app.ui.border_size * 2
 	// Draw the padding around the tiles
-	app.gg.draw_rounded_rect(xstart, ystart, tiles_size / 2, tiles_size / 2, tiles_size / 24,
+	app.gg.draw_rounded_rect(xstart, ystart, tiles_size, tiles_size, tiles_size / 24,
 		app.theme.padding_color)
 	// Draw the actual tiles
 	for y in 0 .. 4 {
@@ -642,7 +640,7 @@ fn (app &App) draw_tiles() {
 			th := tw // square tiles, w == h
 			xoffset := xstart + app.ui.padding_size + x * toffset + (app.ui.tile_size - tw) / 2
 			yoffset := ystart + app.ui.padding_size + y * toffset + (app.ui.tile_size - th) / 2
-			app.gg.draw_rounded_rect(xoffset, yoffset, tw / 2, th / 2, tw / 8, tile_color)
+			app.gg.draw_rounded_rect(xoffset, yoffset, tw, th, tw / 8, tile_color)
 			if tidx != 0 { // 0 == blank spot
 				xpos := xoffset + tw / 2
 				ypos := yoffset + th / 2
@@ -825,8 +823,8 @@ fn on_event(e &gg.Event, mut app App) {
 		.touches_began {
 			if e.num_touches > 0 {
 				t := e.touches[0]
-				app.touch.start = {
-					pos: {
+				app.touch.start = Touch{
+					pos: Pos{
 						x: int(t.pos_x / app.ui.dpi_scale)
 						y: int(t.pos_y / app.ui.dpi_scale)
 					}
@@ -837,8 +835,8 @@ fn on_event(e &gg.Event, mut app App) {
 		.touches_ended {
 			if e.num_touches > 0 {
 				t := e.touches[0]
-				app.touch.end = {
-					pos: {
+				app.touch.end = Touch{
+					pos: Pos{
 						x: int(t.pos_x / app.ui.dpi_scale)
 						y: int(t.pos_y / app.ui.dpi_scale)
 					}
@@ -848,8 +846,8 @@ fn on_event(e &gg.Event, mut app App) {
 			}
 		}
 		.mouse_down {
-			app.touch.start = {
-				pos: {
+			app.touch.start = Touch{
+				pos: Pos{
 					x: int(e.mouse_x / app.ui.dpi_scale)
 					y: int(e.mouse_y / app.ui.dpi_scale)
 				}
@@ -857,8 +855,8 @@ fn on_event(e &gg.Event, mut app App) {
 			}
 		}
 		.mouse_up {
-			app.touch.end = {
-				pos: {
+			app.touch.end = Touch{
+				pos: Pos{
 					x: int(e.mouse_x / app.ui.dpi_scale)
 					y: int(e.mouse_y / app.ui.dpi_scale)
 				}

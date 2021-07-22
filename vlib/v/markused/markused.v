@@ -7,19 +7,24 @@ import v.util
 import v.pref
 
 // mark_used walks the AST, starting at main() and marks all used fns transitively
-pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.File) {
+pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []&ast.File) {
 	mut all_fns, all_consts := all_fn_and_const(ast_files)
-
 	util.timing_start(@METHOD)
 	defer {
 		util.timing_measure(@METHOD)
 	}
-
 	mut all_fn_root_names := [
 		'main.main',
 		'__new_array',
+		'str_intp',
+		'format_sb',
 		'__new_array_with_default',
 		'__new_array_with_array_default',
+		'v_realloc' /* needed for _STR */,
+		'malloc',
+		'malloc_noscan',
+		'vcalloc',
+		'vcalloc_noscan',
 		'new_array_from_c_array',
 		'v_fixed_index',
 		'memdup',
@@ -51,12 +56,14 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 		// string. methods
 		'18.add',
 		'18.trim_space',
+		'18.repeat',
 		'18.replace',
 		'18.clone',
 		'18.clone_static',
 		'18.trim',
 		'18.substr',
 		'18.at',
+		'18.at_with_check',
 		'18.index_kmp',
 		// string. ==, !=, etc...
 		'18.eq',
@@ -65,51 +72,78 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 		'18.gt',
 		'18.le',
 		'18.ge',
-		// ustring. ==, !=, etc...
-		'19.eq',
-		'19.ne',
-		'19.lt',
-		'19.gt',
-		'19.le',
-		'19.ge',
-		'19.add',
+		'fast_string_eq',
 		// other array methods
-		'21.get',
-		'21.set',
-		'21.get_unsafe',
-		'21.set_unsafe',
-		'21.clone_static',
-		'21.first',
-		'21.last',
-		'21.reverse',
-		'21.repeat',
-		'21.slice',
-		'21.slice2',
+		'20.get',
+		'20.set',
+		'20.get_unsafe',
+		'20.set_unsafe',
+		'20.get_with_check' /* used for `x := a[i] or {}` */,
+		'20.clone_static_to_depth',
+		'20.clone_to_depth',
+		'20.first',
+		'20.last',
+		'20.pointers' /* TODO: handle generic methods calling array primitives more precisely in pool_test.v */,
+		'20.reverse',
+		'20.repeat_to_depth',
+		'20.slice',
+		'20.slice2',
 		'59.get',
 		'59.set',
-		'65557.last',
-		'65557.pop',
-		'65557.push',
-		'65557.insert_many',
-		'65557.prepend_many',
-		'65557.reverse',
-		'65557.set',
-		'65557.set_unsafe',
+		'65556.last',
+		'65556.pop',
+		'65556.push',
+		'65556.insert_many',
+		'65556.prepend_many',
+		'65556.reverse',
+		'65556.set',
+		'65556.set_unsafe',
 		// TODO: process the _vinit const initializations automatically too
+		'json__decode_string',
 		'os.getwd',
 		'os.init_os_args',
 		'os.init_os_args_wide',
 	]
+
+	if pref.is_bare {
+		all_fn_root_names << [
+			'strlen',
+			'memcmp',
+			'memcpy',
+			'realloc',
+			'vsnprintf',
+			'vsprintf',
+		]
+	}
+
 	if pref.gc_mode in [.boehm_full_opt, .boehm_incr_opt] {
 		all_fn_root_names << [
+			'memdup_noscan',
 			'__new_array_noscan',
 			'__new_array_with_default_noscan',
 			'__new_array_with_array_default_noscan',
 			'new_array_from_c_array_noscan',
+			'20.clone_static_to_depth_noscan',
+			'20.clone_to_depth_noscan',
+			'20.reverse_noscan',
+			'20.repeat_to_depth_noscan',
+			'65556.pop_noscan',
+			'65556.push_noscan',
+			'65556.push_many_noscan',
+			'65556.insert_noscan',
+			'65556.insert_many_noscan',
+			'65556.prepend_noscan',
+			'65556.prepend_many_noscan',
+			'65556.reverse_noscan',
+			'65556.grow_cap_noscan',
+			'65556.grow_len_noscan',
 		]
 	}
 
 	for k, mut mfn in all_fns {
+		$if trace_skip_unused_all_fns ? {
+			println('k: $k | mfn: $mfn.name')
+		}
 		mut method_receiver_typename := ''
 		if mfn.is_method {
 			method_receiver_typename = table.type_to_str(mfn.receiver.typ)
@@ -124,7 +158,9 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 			all_fn_root_names << k
 			continue
 		}
-		if k.ends_with('.str') {
+		// auto generated string interpolation functions, may
+		// call .str or .auto_str methods for user types:
+		if k.ends_with('.str') || k.ends_with('.auto_str') {
 			all_fn_root_names << k
 			continue
 		}
@@ -136,11 +172,26 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 			all_fn_root_names << k
 			continue
 		}
+
+		// sync:
+		if k == 'sync.new_channel_st' {
+			all_fn_root_names << k
+			continue
+		}
+		if k == 'sync.channel_select' {
+			all_fn_root_names << k
+			continue
+		}
+		if method_receiver_typename == '&sync.Channel' {
+			all_fn_root_names << k
+			continue
+		}
 		if k.ends_with('.lock') || k.ends_with('.unlock') || k.ends_with('.rlock')
 			|| k.ends_with('.runlock') {
 			all_fn_root_names << k
 			continue
 		}
+		// testing framework:
 		if pref.is_test {
 			if k.starts_with('test_') || k.contains('.test_') {
 				all_fn_root_names << k
@@ -152,11 +203,24 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 				continue
 			}
 		}
+		// public/exported functions can not be skipped,
+		// especially when producing a shared library:
 		if mfn.is_pub && pref.is_shared {
 			all_fn_root_names << k
 			continue
 		}
+		if mfn.name in ['+', '-', '*', '%', '/', '<', '=='] {
+			// TODO: mark the used operators in the checker
+			all_fn_root_names << k
+			continue
+		}
+		if pref.prealloc && k.starts_with('prealloc_') {
+			all_fn_root_names << k
+			continue
+		}
 	}
+
+	// handle assertions and testing framework callbacks:
 	if pref.is_debug {
 		all_fn_root_names << 'panic_debug'
 	}
@@ -173,6 +237,44 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 		}
 	}
 
+	// handle interface implementation methods:
+	for isym in table.type_symbols {
+		if isym.kind != .interface_ {
+			continue
+		}
+		interface_info := isym.info as ast.Interface
+		if interface_info.methods.len == 0 {
+			continue
+		}
+		for itype in interface_info.types {
+			pitype := itype.set_nr_muls(1)
+			for method in interface_info.methods {
+				interface_implementation_method_name := '${pitype}.$method.name'
+				$if trace_skip_unused_interface_methods ? {
+					eprintln('>> isym.name: $isym.name | interface_implementation_method_name: $interface_implementation_method_name')
+				}
+				all_fn_root_names << interface_implementation_method_name
+			}
+		}
+	}
+
+	// handle vweb magic router methods:
+	typ_vweb_result := table.find_type_idx('vweb.Result')
+	if typ_vweb_result != 0 {
+		for vgt in table.used_vweb_types {
+			sym_app := table.get_type_symbol(vgt)
+			for m in sym_app.methods {
+				if m.return_type == typ_vweb_result {
+					pvgt := vgt.set_nr_muls(1)
+					// eprintln('vgt: $vgt | pvgt: $pvgt | sym_app.name: $sym_app.name | m.name: $m.name')
+					all_fn_root_names << '${pvgt}.$m.name'
+				}
+			}
+		}
+	}
+
+	//
+
 	mut walker := Walker{
 		table: table
 		files: ast_files
@@ -180,12 +282,13 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 		all_consts: all_consts
 	}
 	// println( all_fns.keys() )
+	walker.mark_exported_fns()
 	walker.mark_root_fns(all_fn_root_names)
 
 	if walker.n_asserts > 0 {
 		walker.fn_decl(mut all_fns['__print_assert_failure'])
 	}
-	if walker.n_maps > 0 {
+	if table.used_maps > 0 {
 		for k, mut mfn in all_fns {
 			mut method_receiver_typename := ''
 			if mfn.is_method {
@@ -195,6 +298,27 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 				|| method_receiver_typename == '&map' || method_receiver_typename == '&DenseArray'
 				|| k.starts_with('map_') {
 				walker.fn_decl(mut mfn)
+			}
+			if pref.gc_mode in [.boehm_full_opt, .boehm_incr_opt] {
+				if k in ['new_map_noscan_key', 'new_map_noscan_value', 'new_map_noscan_key_value',
+					'new_map_init_noscan_key', 'new_map_init_noscan_value',
+					'new_map_init_noscan_key_value',
+				] {
+					walker.fn_decl(mut mfn)
+				}
+			}
+		}
+	} else {
+		for map_fn_name in ['new_map', 'new_map_init', 'map_hash_string', 'new_dense_array'] {
+			walker.used_fns.delete(map_fn_name)
+		}
+		for k, mut mfn in all_fns {
+			if !mfn.is_method {
+				continue
+			}
+			method_receiver_typename := table.type_to_str(mfn.receiver.typ)
+			if method_receiver_typename in ['&map', '&mapnode', '&SortedMap', '&DenseArray'] {
+				walker.used_fns.delete(k)
 			}
 		}
 	}
@@ -211,11 +335,11 @@ pub fn mark_used(mut table ast.Table, pref &pref.Preferences, ast_files []ast.Fi
 	$if trace_skip_unused ? {
 		eprintln('>> t.used_fns: $table.used_fns.keys()')
 		eprintln('>> t.used_consts: $table.used_consts.keys()')
-		eprintln('>> walker.n_maps: $walker.n_maps')
+		eprintln('>> walker.table.used_maps: $walker.table.used_maps')
 	}
 }
 
-fn all_fn_and_const(ast_files []ast.File) (map[string]ast.FnDecl, map[string]ast.ConstField) {
+fn all_fn_and_const(ast_files []&ast.File) (map[string]ast.FnDecl, map[string]ast.ConstField) {
 	util.timing_start(@METHOD)
 	defer {
 		util.timing_measure(@METHOD)
@@ -223,7 +347,7 @@ fn all_fn_and_const(ast_files []ast.File) (map[string]ast.FnDecl, map[string]ast
 	mut all_fns := map[string]ast.FnDecl{}
 	mut all_consts := map[string]ast.ConstField{}
 	for i in 0 .. ast_files.len {
-		file := unsafe { &ast_files[i] }
+		file := ast_files[i]
 		for node in file.stmts {
 			match node {
 				ast.FnDecl {

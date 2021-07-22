@@ -43,7 +43,7 @@ fn test_eval() {
 	for input in inputs {
 		stmts << parse_stmt(input, table, scope)
 	}
-	file := ast.File{
+	file := &ast.File{
 		stmts: stmts
 		scope: scope
 	}
@@ -74,12 +74,9 @@ x := 10
 5+7
 8+4
 '
-	table := &ast.Table{}
+	table := ast.new_table()
 	vpref := &pref.Preferences{}
-	gscope := &ast.Scope{
-		parent: 0
-	}
-	prog := parse_file(s, table, .skip_comments, vpref, gscope)
+	prog := parse_file(s, table, .skip_comments, vpref)
 	mut checker := checker.new_checker(table, vpref)
 	checker.check(prog)
 	res := c.gen([prog], table, vpref)
@@ -103,7 +100,7 @@ fn test_one() {
 	for line in input {
 		e << parse_stmt(line, table, scope)
 	}
-	program := ast.File{
+	program := &ast.File{
 		stmts: e
 		scope: scope
 		global_scope: scope
@@ -145,7 +142,7 @@ fn test_parse_expr() {
 		println('\n\nst="$s"')
 		e << parse_stmt(s, table, scope)
 	}
-	program := ast.File{
+	program := &ast.File{
 		stmts: e
 		scope: scope
 		global_scope: scope

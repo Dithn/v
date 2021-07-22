@@ -19,6 +19,11 @@ import mod {
 
 	FnArg,
 	FnRet,
+
+	RightOfIs,
+	RightOfAs,
+
+	Enum
 }
 
 struct Struct {
@@ -37,6 +42,11 @@ interface Interface {
 }
 
 fn f(v FnArg) FnRet {
+	if v is RightOfIs {}
+	_ = v as RightOfAs
+
+	println(Enum.val)
+
 	return {}
 }
 
@@ -59,4 +69,3 @@ fn main() {
 	println(file_ext('main.v'))
 	println(imaginary(1))
 }
-

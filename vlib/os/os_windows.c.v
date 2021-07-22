@@ -2,7 +2,17 @@ module os
 
 import strings
 
+#flag windows -l advapi32
 #include <process.h>
+#include <sys/utime.h>
+
+// See https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createsymboliclinkw
+fn C.CreateSymbolicLinkW(&u16, &u16, u32) int
+
+// See https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createhardlinkw
+fn C.CreateHardLinkW(&u16, &u16, C.SECURITY_ATTRIBUTES) int
+
+fn C._getpid() int
 
 pub const (
 	path_separator = '\\'
@@ -77,12 +87,69 @@ mut:
 	b_inherit_handle       bool
 }
 
+struct C._utimbuf {
+	actime  int
+	modtime int
+}
+
+fn C._utime(&char, voidptr) int
+
 fn init_os_args_wide(argc int, argv &&byte) []string {
 	mut args_ := []string{}
 	for i in 0 .. argc {
 		args_ << unsafe { string_from_wide(&u16(argv[i])) }
 	}
 	return args_
+}
+
+fn native_glob_pattern(pattern string, mut matches []string) ? {
+	$if debug {
+		// FindFirstFile() and FindNextFile() both have a globbing function.
+		// Unfortunately this is not as pronounced as under Unix, but should provide some functionality
+		eprintln('os.glob() does not have all the features on Windows as it has on Unix operating systems')
+	}
+	mut find_file_data := Win32finddata{}
+	wpattern := pattern.replace('/', '\\').to_wide()
+	h_find_files := C.FindFirstFile(wpattern, voidptr(&find_file_data))
+
+	defer {
+		C.FindClose(h_find_files)
+	}
+
+	if h_find_files == C.INVALID_HANDLE_VALUE {
+		return error('os.glob(): Could not get a file handle: ' +
+			get_error_msg(int(C.GetLastError())))
+	}
+
+	// save first finding
+	fname := unsafe { string_from_wide(&find_file_data.c_file_name[0]) }
+	if fname !in ['.', '..'] {
+		mut fp := fname.replace('\\', '/')
+		if find_file_data.dw_file_attributes & u32(C.FILE_ATTRIBUTE_DIRECTORY) > 0 {
+			fp += '/'
+		}
+		matches << fp
+	}
+
+	// check and save next findings
+	for i := 0; C.FindNextFile(h_find_files, voidptr(&find_file_data)) > 0; i++ {
+		filename := unsafe { string_from_wide(&find_file_data.c_file_name[0]) }
+		if filename in ['.', '..'] {
+			continue
+		}
+		mut fpath := filename.replace('\\', '/')
+		if find_file_data.dw_file_attributes & u32(C.FILE_ATTRIBUTE_DIRECTORY) > 0 {
+			fpath += '/'
+		}
+		matches << fpath
+	}
+}
+
+pub fn utime(path string, actime int, modtime int) ? {
+	mut u := C._utimbuf{actime, modtime}
+	if C._utime(&char(path.str), voidptr(&u)) != 0 {
+		return error_with_code(posix_get_error_msg(C.errno), C.errno)
+	}
 }
 
 pub fn ls(path string) ?[]string {
@@ -137,7 +204,7 @@ pub fn mkdir(path string) ?bool {
 	}
 	apath := real_path(path)
 	if !C.CreateDirectory(apath.to_wide(), 0) {
-		return error('mkdir failed for "$apath", because CreateDirectory returned ' +
+		return error('mkdir failed for "$apath", because CreateDirectory returned: ' +
 			get_error_msg(int(C.GetLastError())))
 	}
 	return true
@@ -157,7 +224,7 @@ pub fn get_file_handle(path string) HANDLE {
 pub fn get_module_filename(handle HANDLE) ?string {
 	unsafe {
 		mut sz := 4096 // Optimized length
-		mut buf := &u16(malloc(4096))
+		mut buf := &u16(malloc_noscan(4096))
 		for {
 			status := int(C.GetModuleFileNameW(handle, voidptr(&buf), sz))
 			match status {
@@ -309,21 +376,38 @@ pub fn execute(cmd string) Result {
 	}
 }
 
-// See https://docs.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-createsymboliclinkw
-fn C.CreateSymbolicLinkW(&u16, &u16, u32) int
+pub fn symlink(origin string, target string) ?bool {
+	// this is a temporary fix for TCC32 due to runtime error
+	// TODO: find the cause why TCC32 for Windows does not work without the compiletime option
+	$if x64 || x32 {
+		mut flags := 0
+		if is_dir(origin) {
+			flags ^= 1
+		}
 
-pub fn symlink(symlink_path string, target_path string) ?bool {
-	mut flags := 0
-	if is_dir(symlink_path) {
-		flags |= 1
+		flags ^= 2 // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
+		res := C.CreateSymbolicLinkW(target.to_wide(), origin.to_wide(), flags)
+
+		// 1 = success, != 1 failure => https://stackoverflow.com/questions/33010440/createsymboliclink-on-windows-10
+		if res != 1 {
+			return error(get_error_msg(int(C.GetLastError())))
+		}
+		if !exists(target) {
+			return error('C.CreateSymbolicLinkW reported success, but symlink still does not exist')
+		}
+		return true
 	}
-	flags |= 2 // SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE
-	res := C.CreateSymbolicLinkW(symlink_path.to_wide(), target_path.to_wide(), flags)
-	if res == 0 {
+	return false
+}
+
+pub fn link(origin string, target string) ?bool {
+	res := C.CreateHardLinkW(target.to_wide(), origin.to_wide(), C.NULL)
+	// 1 = success, != 1 failure => https://stackoverflow.com/questions/33010440/createsymboliclink-on-windows-10
+	if res != 1 {
 		return error(get_error_msg(int(C.GetLastError())))
 	}
-	if !exists(symlink_path) {
-		return error('C.CreateSymbolicLinkW reported success, but symlink still does not exist')
+	if !exists(target) {
+		return error('C.CreateHardLinkW reported success, but link still does not exist')
 	}
 	return true
 }
@@ -376,10 +460,9 @@ pub fn debugger_present() bool {
 }
 
 pub fn uname() Uname {
-	// TODO: use Win32 Api functions instead
 	sys_and_ver := execute('cmd /c ver').output.split('[')
-	nodename := execute('cmd /c hostname').output
-	machine := execute('cmd /c echo %PROCESSOR_ARCHITECTURE%').output
+	nodename := hostname()
+	machine := getenv('PROCESSOR_ARCHITECTURE')
 	return Uname{
 		sysname: sys_and_ver[0].trim_space()
 		nodename: nodename
@@ -390,13 +473,23 @@ pub fn uname() Uname {
 }
 
 pub fn hostname() string {
-	// TODO: use C.GetComputerName(&u16, u32) int instead
-	return execute('cmd /c hostname').output
+	hostname := [255]u16{}
+	size := u32(255)
+	res := C.GetComputerNameW(&hostname[0], &size)
+	if !res {
+		return get_error_msg(int(C.GetLastError()))
+	}
+	return unsafe { string_from_wide(&hostname[0]) }
 }
 
 pub fn loginname() string {
-	// TODO: use C.GetUserName(&char, u32) bool instead
-	return execute('cmd /c echo %USERNAME%').output
+	loginname := [255]u16{}
+	size := u32(255)
+	res := C.GetUserNameW(&loginname[0], &size)
+	if !res {
+		return get_error_msg(int(C.GetLastError()))
+	}
+	return unsafe { string_from_wide(&loginname[0]) }
 }
 
 // `is_writable_folder` - `folder` exists and is writable to the process
@@ -416,11 +509,34 @@ pub fn is_writable_folder(folder string) ?bool {
 	return true
 }
 
-fn C._getpid() int
-
 [inline]
 pub fn getpid() int {
 	return C._getpid()
+}
+
+[inline]
+pub fn getppid() int {
+	return 0
+}
+
+[inline]
+pub fn getuid() int {
+	return 0
+}
+
+[inline]
+pub fn geteuid() int {
+	return 0
+}
+
+[inline]
+pub fn getgid() int {
+	return 0
+}
+
+[inline]
+pub fn getegid() int {
+	return 0
 }
 
 pub fn posix_set_permission_bit(path_s string, mode u32, enable bool) {

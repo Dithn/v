@@ -18,11 +18,36 @@ fn (mut g Gen) index_expr(node ast.IndexExpr) {
 		} else if sym.kind == .map {
 			g.index_of_map(node, sym)
 		} else if sym.kind == .string && !node.left_type.is_ptr() {
-			g.write('string_at(')
-			g.expr(node.left)
-			g.write(', ')
-			g.expr(node.index)
-			g.write(')')
+			is_direct_array_access := g.fn_decl != 0 && g.fn_decl.is_direct_arr
+			if is_direct_array_access {
+				g.expr(node.left)
+				g.write('.str[ ')
+				g.expr(node.index)
+				g.write(']')
+			} else {
+				gen_or := node.or_expr.kind != .absent || node.is_option
+				if gen_or {
+					tmp_opt := g.new_tmp_var()
+					cur_line := g.go_before_stmt(0)
+					g.out.write_string(util.tabs(g.indent))
+					opt_elem_type := g.typ(ast.byte_type.set_flag(.optional))
+					g.write('$opt_elem_type $tmp_opt = string_at_with_check(')
+					g.expr(node.left)
+					g.write(', ')
+					g.expr(node.index)
+					g.writeln(');')
+					if !node.is_option {
+						g.or_block(tmp_opt, node.or_expr, ast.byte_type)
+					}
+					g.write('\n$cur_line*(byte*)&${tmp_opt}.data')
+				} else {
+					g.write('string_at(')
+					g.expr(node.left)
+					g.write(', ')
+					g.expr(node.index)
+					g.write(')')
+				}
+			}
 		} else {
 			g.expr(node.left)
 			g.write('[')
@@ -33,7 +58,7 @@ fn (mut g Gen) index_expr(node ast.IndexExpr) {
 }
 
 fn (mut g Gen) range_expr(node ast.IndexExpr, range ast.RangeExpr) {
-	sym := g.table.get_type_symbol(node.left_type)
+	sym := g.table.get_final_type_symbol(node.left_type)
 	if sym.kind == .string {
 		g.write('string_substr(')
 		g.expr(node.left)
@@ -46,7 +71,8 @@ fn (mut g Gen) range_expr(node ast.IndexExpr, range ast.RangeExpr) {
 	} else if sym.kind == .array_fixed {
 		// Convert a fixed array to V array when doing `fixed_arr[start..end]`
 		info := sym.info as ast.ArrayFixed
-		g.write('array_slice(new_array_from_c_array(')
+		noscan := g.check_noscan(info.elem_type)
+		g.write('array_slice(new_array_from_c_array${noscan}(')
 		g.write('$info.size')
 		g.write(', $info.size')
 		g.write(', sizeof(')
@@ -248,7 +274,7 @@ fn (mut g Gen) index_of_array(node ast.IndexExpr, sym ast.TypeSymbol) {
 			g.writeln('if ($tmp_opt_ptr) {')
 			g.writeln('\t*(($elem_type_str*)&${tmp_opt}.data) = *(($elem_type_str*)$tmp_opt_ptr);')
 			g.writeln('} else {')
-			g.writeln('\t${tmp_opt}.state = 2; ${tmp_opt}.err = v_error(_SLIT("array index out of range"));')
+			g.writeln('\t${tmp_opt}.state = 2; ${tmp_opt}.err = _v_error(_SLIT("array index out of range"));')
 			g.writeln('}')
 			if !node.is_option {
 				g.or_block(tmp_opt, node.or_expr, elem_type)
@@ -415,7 +441,7 @@ fn (mut g Gen) index_of_map(node ast.IndexExpr, sym ast.TypeSymbol) {
 			g.writeln('if ($tmp_opt_ptr) {')
 			g.writeln('\t*(($elem_type_str*)&${tmp_opt}.data) = *(($elem_type_str*)$tmp_opt_ptr);')
 			g.writeln('} else {')
-			g.writeln('\t${tmp_opt}.state = 2; ${tmp_opt}.err = v_error(_SLIT("array index out of range"));')
+			g.writeln('\t${tmp_opt}.state = 2; ${tmp_opt}.err = _v_error(_SLIT("array index out of range"));')
 			g.writeln('}')
 			if !node.is_option {
 				g.or_block(tmp_opt, node.or_expr, elem_type)

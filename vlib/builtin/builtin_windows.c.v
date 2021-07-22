@@ -98,7 +98,9 @@ fn builtin_init() {
 			C.setbuf(C.stderr, 0)
 		}
 	}
-	add_unhandled_exception_handler()
+	$if !no_backtrace ? {
+		add_unhandled_exception_handler()
+	}
 }
 
 fn print_backtrace_skipping_top_frames(skipframes int) bool {
@@ -267,6 +269,7 @@ fn break_if_debugger_attached() {
 		unsafe {
 			mut ptr := &voidptr(0)
 			*ptr = voidptr(0)
+			_ = ptr
 		}
 	} $else {
 		if C.IsDebuggerPresent() {

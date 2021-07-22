@@ -1,5 +1,10 @@
 -## V 0.2.4
--*Not yet released*
+-*Not yet released, changelog is not full*
+- String interpolation and struct stringers are now implemented in pure V
+with a much cleaner and faster implementation. Previously libc's `sprintf`
+was used.
+- Improved `unused variable` warning. Assigning to a variable no longer marks it as used.
+- Bare metal support. Vinix OS kernel is now being developed in V.
 
 ## V 0.2.2 - 0.2.3
 *22 Jan 2021*
@@ -125,7 +130,6 @@ files with compilation errors.
 - High order functions improvements (functions can now be returned etc).
 - Anonymous functions that can be defined inside other functions.
 - Built-in JSON module is back.
-- Closures.
 - Lots and lots of new tests added, including output tests that test error messages.
 - Multiple errors are now printed, the compiler no longer stops after the first error.
 - The new JS backend using the AST parser (almost complete).
@@ -195,7 +199,7 @@ files with compilation errors.
 - `os.cp()` for copying files and directores.
 - Additional compile-time flags: `$if clang, msvc, mingw, x32, x64, big_endian, little_endian {`.
 - All C functions now have to be declared, all missing C functions have been defined.
-- Global variables (only with the `--enable-globals` flag)
+- Global variables (only with the `-enable-globals` flag)
     for low level applications like kernels and drivers.
 - Nothing can be cast to bool (previously code like `if bool(1) {` worked).
 - `<<` and `>>` now work with all integer types.

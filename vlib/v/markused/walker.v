@@ -11,10 +11,9 @@ pub mut:
 	table       &ast.Table
 	used_fns    map[string]bool // used_fns['println'] == true
 	used_consts map[string]bool // used_consts['os.args'] == true
-	n_maps      int
 	n_asserts   int
 mut:
-	files      []ast.File
+	files      []&ast.File
 	all_fns    map[string]ast.FnDecl
 	all_consts map[string]ast.ConstField
 }
@@ -42,6 +41,14 @@ pub fn (mut w Walker) mark_root_fns(all_fn_root_names []string) {
 				println('>>>> $fn_name uses: ')
 			}
 			w.fn_decl(mut w.all_fns[fn_name])
+		}
+	}
+}
+
+pub fn (mut w Walker) mark_exported_fns() {
+	for _, mut func in w.all_fns {
+		if func.is_exported {
+			w.fn_decl(mut func)
 		}
 	}
 }
@@ -87,6 +94,9 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 			w.expr(node.cond)
 			w.expr(node.high)
 			w.stmts(node.stmts)
+			if node.kind == .map {
+				w.table.used_maps++
+			}
 		}
 		ast.ForStmt {
 			w.expr(node.cond)
@@ -97,8 +107,10 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 		}
 		ast.SqlStmt {
 			w.expr(node.db_expr)
-			w.expr(node.where_expr)
-			w.exprs(node.update_exprs)
+			for line in node.lines {
+				w.expr(line.where_expr)
+				w.exprs(line.update_exprs)
+			}
 		}
 		ast.StructDecl {
 			w.struct_fields(node.fields)
@@ -206,6 +218,10 @@ fn (mut w Walker) expr(node ast.Expr) {
 			w.expr(node.left)
 			w.expr(node.index)
 			w.or_block(node.or_expr)
+			sym := w.table.get_final_type_symbol(node.left_type)
+			if sym.kind == .map {
+				w.table.used_maps++
+			}
 		}
 		ast.InfixExpr {
 			w.expr(node.left)
@@ -219,6 +235,10 @@ fn (mut w Walker) expr(node ast.Expr) {
 				if opmethod := sym.find_method(node.op.str()) {
 					w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
 				}
+			}
+			right_sym := w.table.get_type_symbol(node.right_type)
+			if node.op in [.not_in, .key_in] && right_sym.kind == .map {
+				w.table.used_maps++
 			}
 		}
 		ast.IfGuardExpr {
@@ -251,7 +271,7 @@ fn (mut w Walker) expr(node ast.Expr) {
 		ast.MapInit {
 			w.exprs(node.keys)
 			w.exprs(node.vals)
-			w.n_maps++
+			w.table.used_maps++
 		}
 		ast.MatchExpr {
 			w.expr(node.cond)
@@ -278,7 +298,7 @@ fn (mut w Walker) expr(node ast.Expr) {
 				w.expr(node.high)
 			}
 		}
-		ast.SizeOf {
+		ast.SizeOf, ast.IsRefType {
 			w.expr(node.expr)
 		}
 		ast.StringInterLiteral {
@@ -378,7 +398,11 @@ pub fn (mut w Walker) call_expr(mut node ast.CallExpr) {
 	w.expr(node.left)
 	w.or_block(node.or_block)
 	//
-	fn_name := if node.is_method { node.receiver_type.str() + '.' + node.name } else { node.name }
+	fn_name := if node.is_method {
+		int(node.receiver_type).str() + '.' + node.name
+	} else {
+		node.name
+	}
 	if w.used_fns[fn_name] {
 		return
 	}

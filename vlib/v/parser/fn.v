@@ -26,27 +26,27 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		p.expecting_type = true // Makes name_expr() parse the type `User` in `json.decode(User, txt)`
 		or_kind = .block
 	}
-	//
+
 	old_expr_mod := p.expr_mod
 	defer {
 		p.expr_mod = old_expr_mod
 	}
 	p.expr_mod = ''
-	//
-	mut generic_types := []ast.Type{}
-	mut generic_list_pos := p.tok.position()
+
+	mut concrete_types := []ast.Type{}
+	mut concrete_list_pos := p.tok.position()
 	if p.tok.kind == .lt {
 		// `foo<int>(10)`
 		p.expr_mod = ''
-		generic_types = p.parse_generic_type_list()
-		generic_list_pos = generic_list_pos.extend(p.prev_tok.position())
+		concrete_types = p.parse_generic_type_list()
+		concrete_list_pos = concrete_list_pos.extend(p.prev_tok.position())
 		// In case of `foo<T>()`
 		// T is unwrapped and registered in the checker.
 		full_generic_fn_name := if fn_name.contains('.') { fn_name } else { p.prepend_mod(fn_name) }
-		has_generic_generic := generic_types.filter(it.has_flag(.generic)).len > 0
-		if !has_generic_generic {
+		has_generic := concrete_types.any(it.has_flag(.generic))
+		if !has_generic {
 			// will be added in checker
-			p.table.register_fn_generic_types(full_generic_fn_name, generic_types)
+			p.table.register_fn_concrete_types(full_generic_fn_name, concrete_types)
 		}
 	}
 	p.check(.lpar)
@@ -81,6 +81,9 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 	if p.tok.kind == .question {
 		// `foo()?`
 		p.next()
+		if p.inside_defer {
+			p.error_with_pos('error propagation not allowed inside `defer` blocks', p.prev_tok.position())
+		}
 		or_kind = .propagate
 	}
 	if fn_name in p.imported_symbols {
@@ -95,8 +98,8 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		mod: p.mod
 		pos: pos
 		language: language
-		generic_types: generic_types
-		generic_list_pos: generic_list_pos
+		concrete_types: concrete_types
+		concrete_list_pos: concrete_list_pos
 		or_block: ast.OrExpr{
 			stmts: or_stmts
 			kind: or_kind
@@ -121,7 +124,7 @@ pub fn (mut p Parser) call_args() []ast.CallArg {
 		if is_mut {
 			p.next()
 		}
-		mut comments := p.eat_comments({})
+		mut comments := p.eat_comments()
 		arg_start_pos := p.tok.position()
 		mut array_decompose := false
 		if p.tok.kind == .ellipsis {
@@ -146,7 +149,7 @@ pub fn (mut p Parser) call_args() []ast.CallArg {
 			comments = []ast.Comment{}
 		}
 		pos := arg_start_pos.extend(p.prev_tok.position())
-		comments << p.eat_comments({})
+		comments << p.eat_comments()
 		args << ast.CallArg{
 			is_mut: is_mut
 			share: ast.sharetype_from_flags(is_shared, is_atomic)
@@ -174,12 +177,31 @@ mut:
 fn (mut p Parser) fn_decl() ast.FnDecl {
 	p.top_level_statement_start()
 	start_pos := p.tok.position()
-	is_manualfree := p.is_manualfree || p.attrs.contains('manualfree')
-	is_deprecated := p.attrs.contains('deprecated')
-	is_direct_arr := p.attrs.contains('direct_array_access')
-	is_conditional, conditional_ctdefine := p.attrs.has_comptime_define()
-	mut is_unsafe := p.attrs.contains('unsafe')
-	is_keep_alive := p.attrs.contains('keep_args_alive')
+
+	mut is_manualfree := p.is_manualfree
+	mut is_deprecated := false
+	mut is_direct_arr := false
+	mut is_keep_alive := false
+	mut is_exported := false
+	mut is_unsafe := false
+	mut is_trusted := false
+	mut is_noreturn := false
+	mut is_c2v_variadic := false
+	for fna in p.attrs {
+		match fna.name {
+			'noreturn' { is_noreturn = true }
+			'manualfree' { is_manualfree = true }
+			'deprecated' { is_deprecated = true }
+			'direct_array_access' { is_direct_arr = true }
+			'keep_args_alive' { is_keep_alive = true }
+			'export' { is_exported = true }
+			'unsafe' { is_unsafe = true }
+			'trusted' { is_trusted = true }
+			'c2v_variadic' { is_c2v_variadic = true }
+			else {}
+		}
+	}
+	conditional_ctdefine_idx := p.attrs.find_comptime_define() or { -1 }
 	is_pub := p.tok.kind == .key_pub
 	if is_pub {
 		p.next()
@@ -189,7 +211,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	// C. || JS.
 	mut language := ast.Language.v
 	if p.tok.kind == .name && p.tok.lit == 'C' {
-		is_unsafe = !p.attrs.contains('trusted')
+		is_unsafe = !is_trusted
 		language = ast.Language.c
 	} else if p.tok.kind == .name && p.tok.lit == 'JS' {
 		language = ast.Language.js
@@ -249,11 +271,18 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 				}
 			}
 		}
-		// cannot redefine buildin function
-		if !is_method && !p.builtin_mod && name in builtin_functions {
-			p.error_with_pos('cannot redefine builtin function `$name`', name_pos)
-			return ast.FnDecl{
-				scope: 0
+		if !p.pref.is_fmt {
+			if !is_method && !p.builtin_mod && name in builtin_functions {
+				p.error_with_pos('cannot redefine builtin function `$name`', name_pos)
+				return ast.FnDecl{
+					scope: 0
+				}
+			}
+			if name in p.imported_symbols {
+				p.error_with_pos('cannot redefine imported function `$name`', name_pos)
+				return ast.FnDecl{
+					scope: 0
+				}
 			}
 		}
 	} else if p.tok.kind in [.plus, .minus, .mul, .div, .mod, .lt, .eq] && p.peek_tok.kind == .lpar {
@@ -273,15 +302,19 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		}
 	}
 	// <T>
-	generic_names := p.parse_generic_names()
-	// check generic receiver method has no generic names
-	if is_method && rec.typ.has_flag(.generic) && generic_names.len == 0
-		&& p.table.get_type_symbol(rec.typ).kind != .any {
-		p.error_with_pos('generic receiver method `$name` should add generic names, e.g. $name<T>',
-			name_pos)
+	mut generic_names := p.parse_generic_names()
+	// generic names can be infer with receiver's generic names
+	if is_method && rec.typ.has_flag(.generic) && generic_names.len == 0 {
+		sym := p.table.get_type_symbol(rec.typ)
+		if sym.info is ast.Struct {
+			generic_names = sym.info.generic_types.map(p.table.get_type_symbol(it).name)
+		}
 	}
 	// Args
-	args2, are_args_type_only, is_variadic := p.fn_args()
+	args2, are_args_type_only, mut is_variadic := p.fn_args()
+	if is_c2v_variadic {
+		is_variadic = true
+	}
 	params << args2
 	if !are_args_type_only {
 		for param in params {
@@ -291,11 +324,13 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 					scope: 0
 				}
 			}
+			is_stack_obj := !param.typ.has_flag(.shared_f) && (param.is_mut || param.typ.is_ptr())
 			p.scope.register(ast.Var{
 				name: param.name
 				typ: param.typ
 				is_mut: param.is_mut
 				is_auto_deref: param.is_mut || param.is_auto_rec
+				is_stack_obj: is_stack_obj
 				pos: param.pos
 				is_used: true
 				is_arg: true
@@ -317,7 +352,10 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	end_pos := p.prev_tok.position()
 	short_fn_name := name
 	is_main := short_fn_name == 'main' && p.mod == 'main'
-	is_test := short_fn_name.starts_with('test_') || short_fn_name.starts_with('testsuite_')
+	mut is_test := (short_fn_name.starts_with('test_') || short_fn_name.starts_with('testsuite_'))
+		&& (p.file_base.ends_with('_test.v')
+		|| p.file_base.all_before_last('.v').all_before_last('.').ends_with('_test'))
+
 	// Register
 	if is_method {
 		mut type_sym := p.table.get_type_symbol(rec.typ)
@@ -326,7 +364,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		// we could also check if kind is .array,  .array_fixed, .map instead of mod.len
 		mut is_non_local := type_sym.mod.len > 0 && type_sym.mod != p.mod && type_sym.language == .v
 		// check maps & arrays, must be defined in same module as the elem type
-		if !is_non_local && type_sym.kind in [.array, .map] {
+		if !is_non_local && !(p.builtin_mod && p.pref.is_fmt) && type_sym.kind in [.array, .map] {
 			elem_type_sym := p.table.get_type_symbol(p.table.value_type(rec.typ))
 			is_non_local = elem_type_sym.mod.len > 0 && elem_type_sym.mod != p.mod
 				&& elem_type_sym.language == .v
@@ -349,12 +387,14 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			is_unsafe: is_unsafe
 			is_main: is_main
 			is_test: is_test
-			is_conditional: is_conditional
 			is_keep_alive: is_keep_alive
-			ctdefine: conditional_ctdefine
+			//
+			attrs: p.attrs
+			is_conditional: conditional_ctdefine_idx != -1
+			ctdefine_idx: conditional_ctdefine_idx
+			//
 			no_body: no_body
 			mod: p.mod
-			attrs: p.attrs
 		})
 	} else {
 		if language == .c {
@@ -375,15 +415,18 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			generic_names: generic_names
 			is_pub: is_pub
 			is_deprecated: is_deprecated
+			is_noreturn: is_noreturn
 			is_unsafe: is_unsafe
 			is_main: is_main
 			is_test: is_test
-			is_conditional: is_conditional
 			is_keep_alive: is_keep_alive
-			ctdefine: conditional_ctdefine
+			//
+			attrs: p.attrs
+			is_conditional: conditional_ctdefine_idx != -1
+			ctdefine_idx: conditional_ctdefine_idx
+			//
 			no_body: no_body
 			mod: p.mod
-			attrs: p.attrs
 			language: language
 		})
 	}
@@ -414,15 +457,22 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		return_type: return_type
 		return_type_pos: return_type_pos
 		params: params
+		is_noreturn: is_noreturn
 		is_manualfree: is_manualfree
 		is_deprecated: is_deprecated
+		is_exported: is_exported
 		is_direct_arr: is_direct_arr
 		is_pub: is_pub
 		is_variadic: is_variadic
 		is_main: is_main
 		is_test: is_test
-		is_conditional: is_conditional
 		is_keep_alive: is_keep_alive
+		is_unsafe: is_unsafe
+		//
+		attrs: p.attrs
+		is_conditional: conditional_ctdefine_idx != -1
+		ctdefine_idx: conditional_ctdefine_idx
+		//
 		receiver: ast.StructField{
 			name: rec.name
 			typ: rec.typ
@@ -439,7 +489,6 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		body_pos: body_start_pos
 		file: p.file_name
 		is_builtin: p.builtin_mod || p.mod in util.builtin_module_parts
-		attrs: p.attrs
 		scope: p.scope
 		label_names: p.label_names
 	}
@@ -484,13 +533,13 @@ fn (mut p Parser) fn_receiver(mut params []ast.Param, mut rec ReceiverParsingInf
 	rec.typ = p.parse_type_with_mut(rec.is_mut)
 	if rec.typ.idx() == 0 {
 		// error is set in parse_type
-		return none
+		return error('void receiver type')
 	}
 	rec.type_pos = rec.type_pos.extend(p.prev_tok.position())
 	if is_amp && rec.is_mut {
 		p.error_with_pos('use `(mut f Foo)` or `(f &Foo)` instead of `(mut f &Foo)`',
 			lpar_pos.extend(p.tok.position()))
-		return none
+		return error('invalid `mut f &Foo`')
 	}
 	if is_shared {
 		rec.typ = rec.typ.set_flag(.shared_f)
@@ -552,6 +601,15 @@ fn (mut p Parser) parse_generic_names() []string {
 		}
 		p.check(.name)
 		param_names << name
+		if p.table.find_type_idx(name) == 0 {
+			p.table.register_type_symbol(ast.TypeSymbol{
+				name: name
+				cname: util.no_dots(name)
+				mod: p.mod
+				kind: .any
+				is_public: true
+			})
+		}
 		first_done = true
 		count++
 	}
@@ -572,14 +630,19 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 			p.tok.position())
 		return ast.AnonFn{}
 	}
+	old_inside_defer := p.inside_defer
+	p.inside_defer = false
 	p.open_scope()
-	p.scope.detached_from_parent = true
+	if !p.pref.backend.is_js() {
+		p.scope.detached_from_parent = true
+	}
 	// TODO generics
 	args, _, is_variadic := p.fn_args()
 	for arg in args {
 		if arg.name.len == 0 {
 			p.error_with_pos('use `_` to name an unused parameter', arg.pos)
 		}
+		is_stack_obj := !arg.typ.has_flag(.shared_f) && (arg.is_mut || arg.typ.is_ptr())
 		p.scope.register(ast.Var{
 			name: arg.name
 			typ: arg.typ
@@ -587,6 +650,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 			pos: arg.pos
 			is_used: true
 			is_arg: true
+			is_stack_obj: is_stack_obj
 		})
 	}
 	mut same_line := p.tok.line_nr == p.prev_tok.line_nr
@@ -594,7 +658,8 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 	mut return_type_pos := p.tok.position()
 	// lpar: multiple return types
 	if same_line {
-		if p.tok.kind.is_start_of_type() {
+		if (p.tok.kind.is_start_of_type() && (same_line || p.tok.kind != .lsbr))
+			|| (same_line && p.tok.kind == .key_fn) {
 			return_type = p.parse_type()
 			return_type_pos = return_type_pos.extend(p.tok.position())
 		} else if p.tok.kind != .lcbr {
@@ -615,7 +680,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 		is_variadic: is_variadic
 		return_type: return_type
 	}
-	name := 'anon_fn_${p.table.fn_type_signature(func)}_$p.tok.pos'
+	name := 'anon_fn_${p.unique_prefix}_${p.table.fn_type_signature(func)}_$p.tok.pos'
 	keep_fn_name := p.cur_fn_name
 	p.cur_fn_name = name
 	if p.tok.kind == .lcbr {
@@ -630,6 +695,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 	func.name = name
 	idx := p.table.find_or_register_fn_type(p.mod, func, true, false)
 	typ := ast.new_type(idx)
+	p.inside_defer = old_inside_defer
 	// name := p.table.get_type_name(typ)
 	return ast.AnonFn{
 		decl: ast.FnDecl{
@@ -666,6 +732,8 @@ fn (mut p Parser) fn_args() ([]ast.Param, bool, bool) {
 	types_only := p.tok.kind in [.amp, .ellipsis, .key_fn, .lsbr]
 		|| (p.peek_tok.kind == .comma && p.table.known_type(argname))
 		|| p.peek_tok.kind == .dot || p.peek_tok.kind == .rpar
+		|| (p.tok.kind == .key_mut && (p.peek_token(2).kind == .comma
+		|| p.peek_token(2).kind == .rpar))
 	// TODO copy pasta, merge 2 branches
 	if types_only {
 		mut arg_no := 1

@@ -22,7 +22,7 @@ https://github.com/vlang/v/issues/new/choose
 
 You can also use #help on Discord: https://discord.gg/vlang
 '
-	no_compiler_error       = '
+	no_compiler_error = '
 ==================
 Error: no C compiler detected.
 
@@ -45,7 +45,7 @@ const (
 
 fn (mut v Builder) find_win_cc() ? {
 	$if !windows {
-		return none
+		return
 	}
 	ccompiler_version_res := os.execute('$v.pref.ccompiler -v')
 	if ccompiler_version_res.exit_code != 0 {
@@ -63,7 +63,7 @@ fn (mut v Builder) find_win_cc() ? {
 				if v.pref.is_verbose {
 					println('tcc not found')
 				}
-				return none
+				return error('tcc not found')
 			}
 			v.pref.ccompiler = thirdparty_tcc
 			v.pref.ccompiler_type = .tinyc
@@ -199,18 +199,14 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 		'-Wno-unused',
 		'-Wno-type-limits',
 		'-Wno-tautological-compare',
-		'-Wno-tautological-bitwise-compare',
 		// these cause various issues:
-		'-Wno-enum-conversion' /* used in vlib/sokol, where C enums in C structs are typed as V structs instead */,
-		'-Wno-sometimes-uninitialized' /* produced after exhaustive matches */,
 		'-Wno-shadow' /* the V compiler already catches this for user code, and enabling this causes issues with e.g. the `it` variable */,
-		'-Wno-int-to-void-pointer-cast',
 		'-Wno-int-to-pointer-cast' /* gcc version of the above */,
 		'-Wno-trigraphs' /* see stackoverflow.com/a/8435413 */,
 		'-Wno-missing-braces' /* see stackoverflow.com/q/13746033 */,
+		// enable additional warnings:
 		'-Wno-unknown-warning' /* if a C compiler does not understand a certain flag, it should just ignore it */,
 		'-Wno-unknown-warning-option' /* clang equivalent of the above */,
-		// enable additional warnings:
 		'-Wdate-time',
 		'-Wduplicated-branches',
 		'-Wduplicated-cond',
@@ -265,6 +261,12 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 		if have_flto {
 			optimization_options << '-flto'
 		}
+		ccoptions.wargs << [
+			'-Wno-tautological-bitwise-compare',
+			'-Wno-enum-conversion' /* used in vlib/sokol, where C enums in C structs are typed as V structs instead */,
+			'-Wno-sometimes-uninitialized' /* produced after exhaustive matches */,
+			'-Wno-int-to-void-pointer-cast',
+		]
 	}
 	if ccoptions.is_cc_gcc {
 		if ccoptions.debug_mode {
@@ -316,6 +318,7 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	if ccoptions.debug_mode && os.user_os() != 'windows' && v.pref.build_mode != .build_module {
 		ccoptions.linker_flags << '-rdynamic' // needed for nicer symbolic backtraces
 	}
+
 	if ccompiler != 'msvc' && v.pref.os != .freebsd {
 		ccoptions.wargs << '-Werror=implicit-function-declaration'
 	}
@@ -380,19 +383,10 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	// || os.user_os() == 'linux'
 	if !v.pref.is_bare && v.pref.build_mode != .build_module
 		&& v.pref.os in [.linux, .freebsd, .openbsd, .netbsd, .dragonfly, .solaris, .haiku] {
-		ccoptions.linker_flags << '-lm'
-		ccoptions.linker_flags << '-lpthread'
-		// -ldl is a Linux only thing. BSDs have it in libc.
-		if v.pref.os == .linux {
-			ccoptions.linker_flags << '-ldl'
-		}
-		if v.pref.os == .freebsd {
-			// FreeBSD: backtrace needs execinfo library while linking
+		if v.pref.os in [.freebsd, .netbsd] {
+			// Free/NetBSD: backtrace needs execinfo library while linking
 			ccoptions.linker_flags << '-lexecinfo'
 		}
-	}
-	if !v.pref.is_bare && v.pref.os == .js && os.user_os() == 'linux' {
-		ccoptions.linker_flags << '-lm'
 	}
 	ccoptions.env_cflags = os.getenv('CFLAGS')
 	ccoptions.env_ldflags = os.getenv('LDFLAGS')
@@ -461,47 +455,6 @@ fn (mut v Builder) setup_output_name() {
 	v.ccoptions.o_args << '-o "$v.pref.out_name"'
 }
 
-fn (mut v Builder) vjs_cc() bool {
-	vexe := pref.vexe_path()
-	vdir := os.dir(vexe)
-	// Just create a C/JavaScript file and exit
-	// for example: `v -o v.c compiler`
-	ends_with_c := v.pref.out_name.ends_with('.c')
-	ends_with_js := v.pref.out_name.ends_with('.js')
-	if ends_with_c || ends_with_js {
-		v.pref.skip_running = true
-		// Translating V code to JS by launching vjs.
-		// Using a separate process for V.js is for performance mostly,
-		// to avoid constant is_js checks.
-		$if !js {
-			if ends_with_js {
-				vjs_path := vexe + 'js'
-				if !os.exists(vjs_path) {
-					println('V.js compiler not found, building...')
-					// Build V.js. Specifying `-os js` makes V include
-					// only _js.v files and ignore _c.v files.
-					ret := os.system('$vexe -o $vjs_path -os js $vdir/cmd/v')
-					if ret == 0 {
-						println('Done.')
-					} else {
-						println('Failed.')
-						exit(1)
-					}
-				}
-				ret := os.system('$vjs_path -o $v.pref.out_name $v.pref.path')
-				if ret == 0 {
-					println('Done. Run it with `node $v.pref.out_name`')
-					println('JS backend is at a very early stage.')
-				}
-			}
-		}
-		// v.out_name_c may be on a different partition than v.out_name
-		os.mv_by_cp(v.out_name_c, v.pref.out_name) or { panic(err) }
-		return true
-	}
-	return false
-}
-
 fn (mut v Builder) dump_c_options(all_args []string) {
 	if v.pref.dump_c_flags != '' {
 		non_empty_args := all_args.filter(it != '').join('\n') + '\n'
@@ -526,7 +479,23 @@ fn (mut v Builder) cc() {
 		}
 		return
 	}
-	if v.vjs_cc() {
+	if v.pref.out_name.ends_with('/-') {
+		// output to stdout
+		content := os.read_file(v.out_name_c) or { panic(err) }
+		println(content)
+		os.rm(v.out_name_c) or {}
+		return
+	}
+	// whether to just create a .c or .js file and exit, for example: `v -o v.c cmd.v`
+	ends_with_c := v.pref.out_name.ends_with('.c')
+	ends_with_js := v.pref.out_name.ends_with('.js')
+	if ends_with_c || ends_with_js {
+		v.pref.skip_running = true
+		msg_mv := 'os.mv_by_cp $v.out_name_c => $v.pref.out_name'
+		util.timing_start(msg_mv)
+		// v.out_name_c may be on a different partition than v.out_name
+		os.mv_by_cp(v.out_name_c, v.pref.out_name) or { panic(err) }
+		util.timing_measure(msg_mv)
 		return
 	}
 	// Cross compiling for Windows
@@ -555,7 +524,7 @@ fn (mut v Builder) cc() {
 		mut ccompiler := v.pref.ccompiler
 		if v.pref.os == .ios {
 			ios_sdk := if v.pref.is_ios_simulator { 'iphonesimulator' } else { 'iphoneos' }
-			ios_sdk_path_res := os.execute_or_panic('xcrun --sdk $ios_sdk --show-sdk-path')
+			ios_sdk_path_res := os.execute_or_exit('xcrun --sdk $ios_sdk --show-sdk-path')
 			mut isysroot := ios_sdk_path_res.output.replace('\n', '')
 			arch := if v.pref.is_ios_simulator {
 				'-arch x86_64'
@@ -756,6 +725,23 @@ fn (mut v Builder) cc() {
 	// }
 }
 
+fn (mut b Builder) ensure_linuxroot_exists(sysroot string) {
+	crossrepo_url := 'https://github.com/spytheman/vlinuxroot'
+	sysroot_git_config_path := os.join_path(sysroot, '.git', 'config')
+	if os.is_dir(sysroot) && !os.exists(sysroot_git_config_path) {
+		// remove existing obsolete unarchived .zip file content
+		os.rmdir_all(sysroot) or {}
+	}
+	if !os.is_dir(sysroot) {
+		println('Downloading files for Linux cross compilation (~22MB) ...')
+		os.system('git clone $crossrepo_url $sysroot')
+		if !os.exists(sysroot_git_config_path) {
+			verror('Failed to clone `$crossrepo_url` to `$sysroot`')
+		}
+		os.chmod(os.join_path(sysroot, 'ld.lld'), 0o755)
+	}
+}
+
 fn (mut b Builder) cc_linux_cross() {
 	b.setup_ccompiler_options(b.pref.ccompiler)
 	b.build_thirdparty_obj_files()
@@ -765,19 +751,7 @@ fn (mut b Builder) cc_linux_cross() {
 		os.mkdir(parent_dir) or { panic(err) }
 	}
 	sysroot := os.join_path(os.vmodules_dir(), 'linuxroot')
-	if !os.is_dir(sysroot) {
-		println('Downloading files for Linux cross compilation (~18 MB)...')
-		zip_url := 'https://github.com/vlang/v/releases/download/0.1.27/linuxroot.zip'
-		zip_file := sysroot + '.zip'
-		os.system('curl -L -o $zip_file $zip_url')
-		if !os.exists(zip_file) {
-			verror('Failed to download `$zip_url` as $zip_file')
-		}
-		os.system('tar -C $parent_dir -xf $zip_file')
-		if !os.is_dir(sysroot) {
-			verror('Failed to unzip $zip_file to $parent_dir')
-		}
-	}
+	b.ensure_linuxroot_exists(sysroot)
 	obj_file := b.out_name_c + '.o'
 	cflags := b.get_os_cflags()
 	defines, others, libs := cflags.defines_others_libs()

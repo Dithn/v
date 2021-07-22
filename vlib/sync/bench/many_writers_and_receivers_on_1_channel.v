@@ -27,8 +27,8 @@ mut:
 	n_readers int
 	n_writers int
 	//
-	pops_wg   &sync.WaitGroup
-	pops      []Event
+	pops_wg &sync.WaitGroup
+	pops    []Event
 	//
 	pushes_wg &sync.WaitGroup
 	pushes    []Event
@@ -36,7 +36,7 @@ mut:
 
 fn do_rec(ch chan int, id int, mut ctx Context) {
 	eprintln('start of  do_rec id: $id')
-	mut timer_sw_x := time.new_stopwatch({})
+	mut timer_sw_x := time.new_stopwatch()
 	mut tmp := int(0)
 	mut i := int(0)
 	// NB: a single receiver thread can get slightly more
@@ -69,7 +69,7 @@ fn do_rec(ch chan int, id int, mut ctx Context) {
 
 fn do_send(ch chan int, id int, mut ctx Context) {
 	eprintln('start of do_send id: $id')
-	mut timer_sw_x := time.new_stopwatch({})
+	mut timer_sw_x := time.new_stopwatch()
 	n_iters := ctx.n_iters
 	base := n_iters * id // sender events can not overlap
 	for i := 0; i < n_iters; i++ {

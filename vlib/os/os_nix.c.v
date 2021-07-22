@@ -6,6 +6,11 @@ import strings
 #include <unistd.h>
 #include <fcntl.h>
 #include <sys/utsname.h>
+#include <sys/types.h>
+#include <utime.h>
+$if !solaris {
+	#include <sys/ptrace.h>
+}
 
 pub const (
 	path_separator = '/'
@@ -47,19 +52,177 @@ mut:
 	machine  &char
 }
 
+struct C.utimbuf {
+	actime  int
+	modtime int
+}
+
+fn C.utime(&char, voidptr) int
+
 fn C.uname(name voidptr) int
 
 fn C.symlink(&char, &char) int
 
+fn C.link(&char, &char) int
+
 fn C.gethostname(&char, int) int
 
-fn C.getlogin_r(&char, int) int
+// NB: not available on Android fn C.getlogin_r(&char, int) int
+fn C.getlogin() &char
+
+fn C.getppid() int
+
+fn C.getgid() int
+
+fn C.getegid() int
+
+fn C.ptrace(u32, u32, voidptr, int) u64
+
+enum GlobMatch {
+	exact
+	ends_with
+	starts_with
+	start_and_ends_with
+	contains
+	any
+}
+
+fn glob_match(dir string, pattern string, next_pattern string, mut matches []string) []string {
+	mut subdirs := []string{}
+	if is_file(dir) {
+		return subdirs
+	}
+	mut files := ls(dir) or { return subdirs }
+	mut mode := GlobMatch.exact
+	mut pat := pattern
+	if pat == '*' {
+		mode = GlobMatch.any
+		if next_pattern != pattern && next_pattern != '' {
+			for file in files {
+				if is_dir('$dir/$file') {
+					subdirs << '$dir/$file'
+				}
+			}
+			return subdirs
+		}
+	}
+	if pat == '**' {
+		files = walk_ext(dir, '')
+		pat = next_pattern
+	}
+	if pat.starts_with('*') {
+		mode = .ends_with
+		pat = pat[1..]
+	}
+	if pat.ends_with('*') {
+		mode = if mode == .ends_with { GlobMatch.contains } else { GlobMatch.starts_with }
+		pat = pat[..pat.len - 1]
+	}
+	if pat.contains('*') {
+		mode = .start_and_ends_with
+	}
+	for file in files {
+		mut fpath := file
+		f := if file.contains(os.path_separator) {
+			pathwalk := file.split(os.path_separator)
+			pathwalk[pathwalk.len - 1]
+		} else {
+			fpath = if dir == '.' { file } else { '$dir/$file' }
+			file
+		}
+		if f in ['.', '..'] || f == '' {
+			continue
+		}
+		hit := match mode {
+			.any {
+				true
+			}
+			.exact {
+				f == pat
+			}
+			.starts_with {
+				f.starts_with(pat)
+			}
+			.ends_with {
+				f.ends_with(pat)
+			}
+			.start_and_ends_with {
+				p := pat.split('*')
+				f.starts_with(p[0]) && f.ends_with(p[1])
+			}
+			.contains {
+				f.contains(pat)
+			}
+		}
+		if hit {
+			if is_dir(fpath) {
+				subdirs << fpath
+				if next_pattern == pattern && next_pattern != '' {
+					matches << '$fpath$os.path_separator'
+				}
+			} else {
+				matches << fpath
+			}
+		}
+	}
+	return subdirs
+}
+
+fn native_glob_pattern(pattern string, mut matches []string) ? {
+	steps := pattern.split(os.path_separator)
+	mut cwd := if pattern.starts_with(os.path_separator) { os.path_separator } else { '.' }
+	mut subdirs := [cwd]
+	for i := 0; i < steps.len; i++ {
+		step := steps[i]
+		step2 := if i + 1 == steps.len { step } else { steps[i + 1] }
+		if step == '' {
+			continue
+		}
+		if is_dir('$cwd$os.path_separator$step') {
+			dd := if cwd == '/' {
+				step
+			} else {
+				if cwd == '.' || cwd == '' {
+					step
+				} else {
+					if step == '.' || step == '/' { cwd } else { '$cwd/$step' }
+				}
+			}
+			if i + 1 != steps.len {
+				if dd !in subdirs {
+					subdirs << dd
+				}
+			}
+		}
+		mut subs := []string{}
+		for sd in subdirs {
+			d := if cwd == '/' {
+				sd
+			} else {
+				if cwd == '.' || cwd == '' {
+					sd
+				} else {
+					if sd == '.' || sd == '/' { cwd } else { '$cwd/$sd' }
+				}
+			}
+			subs << glob_match(d.replace('//', '/'), step, step2, mut matches)
+		}
+		subdirs = subs.clone()
+	}
+}
+
+pub fn utime(path string, actime int, modtime int) ? {
+	mut u := C.utimbuf{actime, modtime}
+	if C.utime(&char(path.str), voidptr(&u)) != 0 {
+		return error_with_code(posix_get_error_msg(C.errno), C.errno)
+	}
+}
 
 pub fn uname() Uname {
 	mut u := Uname{}
 	utsize := sizeof(C.utsname)
 	unsafe {
-		x := malloc(int(utsize))
+		x := malloc_noscan(int(utsize))
 		d := &C.utsname(x)
 		if C.uname(d) == 0 {
 			u.sysname = cstring_to_vstring(d.sysname)
@@ -76,7 +239,7 @@ pub fn uname() Uname {
 pub fn hostname() string {
 	mut hstnme := ''
 	size := 256
-	mut buf := unsafe { &char(malloc(size)) }
+	mut buf := unsafe { &char(malloc_noscan(size)) }
 	if C.gethostname(buf, size) == 0 {
 		hstnme = unsafe { cstring_to_vstring(buf) }
 		unsafe { free(buf) }
@@ -86,13 +249,9 @@ pub fn hostname() string {
 }
 
 pub fn loginname() string {
-	mut lgnname := ''
-	size := 256
-	mut buf := unsafe { &char(malloc(size)) }
-	if C.getlogin_r(buf, size) == 0 {
-		lgnname = unsafe { cstring_to_vstring(buf) }
-		unsafe { free(buf) }
-		return lgnname
+	x := C.getlogin()
+	if !isnil(x) {
+		return unsafe { cstring_to_vstring(x) }
 	}
 	return ''
 }
@@ -147,10 +306,7 @@ pub fn is_dir(path string) bool {
 	return res
 }
 */
-/*
-pub fn (mut f File) fseek(pos, mode int) {
-}
-*/
+
 // mkdir creates a new directory with the specified path.
 pub fn mkdir(path string) ?bool {
 	if path == '.' {
@@ -198,7 +354,7 @@ pub fn execute(cmd string) Result {
 			output: 'exec("$cmd") failed'
 		}
 	}
-	buf := unsafe { malloc(4096) }
+	buf := unsafe { malloc_noscan(4096) }
 	mut res := strings.new_builder(1024)
 	defer {
 		unsafe { res.free() }
@@ -282,6 +438,14 @@ pub fn symlink(origin string, target string) ?bool {
 	return error(posix_get_error_msg(C.errno))
 }
 
+pub fn link(origin string, target string) ?bool {
+	res := C.link(&char(origin.str), &char(target.str))
+	if res == 0 {
+		return true
+	}
+	return error(posix_get_error_msg(C.errno))
+}
+
 // get_error_msg return error code representation in string.
 pub fn get_error_msg(code int) string {
 	return posix_get_error_msg(code)
@@ -304,7 +468,15 @@ pub fn (mut f File) close() {
 	C.fclose(f.cfile)
 }
 
+[inline]
 pub fn debugger_present() bool {
+	// check if the parent could trace its process,
+	// if not a debugger must be present
+	$if linux {
+		return C.ptrace(C.PTRACE_TRACEME, 0, 1, 0) == -1
+	} $else $if macos {
+		return C.ptrace(C.PT_TRACE_ME, 0, voidptr(1), 0) == -1
+	}
 	return false
 }
 
@@ -333,6 +505,31 @@ pub fn is_writable_folder(folder string) ?bool {
 [inline]
 pub fn getpid() int {
 	return C.getpid()
+}
+
+[inline]
+pub fn getppid() int {
+	return C.getppid()
+}
+
+[inline]
+pub fn getuid() int {
+	return C.getuid()
+}
+
+[inline]
+pub fn geteuid() int {
+	return C.geteuid()
+}
+
+[inline]
+pub fn getgid() int {
+	return C.getgid()
+}
+
+[inline]
+pub fn getegid() int {
+	return C.getegid()
 }
 
 // Turns the given bit on or off, depending on the `enable` parameter

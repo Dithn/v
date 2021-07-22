@@ -4,10 +4,19 @@
 import os
 import time
 
+// TODO -usecache
+const voptions = ' -skip-unused -show-timings -stats '
+
+const exe = os.executable()
+
+const fast_dir = os.dir(exe)
+
+const vdir = @VEXEROOT
+
 fn main() {
-	exe := os.executable()
-	dir := os.dir(exe)
-	vdir := os.dir(os.dir(os.dir(dir)))
+	dump(fast_dir)
+	dump(vdir)
+	os.chdir(fast_dir)
 	if !os.exists('$vdir/v') && !os.is_dir('$vdir/vlib') {
 		println('fast.html generator needs to be located in `v/cmd/tools/fast`')
 	}
@@ -37,21 +46,30 @@ fn main() {
 	// println('Checking out ${commit}...')
 	// exec('git checkout $commit')
 	println('  Building vprod...')
-	exec('v -o $vdir/vprod -prod $vdir/cmd/v')
-	diff1 := measure('$vdir/vprod -cc clang -o v.c -show-timings $vdir/cmd/v', 'v.c')
+	os.chdir(vdir)
+	exec('$vdir/v -o $vdir/vprod -prod -prealloc cmd/v')
+	// exec('v -o $vdir/vprod $vdir/cmd/v') // for faster debugging
+	// cache vlib modules
+	exec('$vdir/v wipe-cache')
+	exec('$vdir/v -o v2 -prod cmd/v')
+	// measure
+	diff1 := measure('$vdir/vprod $voptions -o v.c cmd/v', 'v.c')
 	mut tcc_path := 'tcc'
 	$if freebsd {
 		tcc_path = '/usr/local/bin/tcc'
 	}
-	diff2 := measure('$vdir/vprod -cc $tcc_path -o v2 $vdir/cmd/v', 'v2')
-	diff3 := 0 // measure('$vdir/vprod -x64 $vdir/cmd/tools/1mil.v', 'x64 1mil')
-	diff4 := measure('$vdir/vprod -cc clang $vdir/examples/hello_world.v', 'hello.v')
+	diff2 := measure('$vdir/vprod $voptions -cc $tcc_path -o v2 cmd/v', 'v2')
+	diff3 := 0 // measure('$vdir/vprod -native $vdir/cmd/tools/1mil.v', 'native 1mil')
+	diff4 := measure('$vdir/vprod -usecache $voptions -cc clang examples/hello_world.v',
+		'hello.v')
 	vc_size := os.file_size('v.c') / 1000
 	// scan/parse/check/cgen
-	scan, parse, check, cgen := measure_steps(vdir)
+	scan, parse, check, cgen, vlines := measure_steps(vdir)
 	// println('Building V took ${diff}ms')
 	commit_date := exec('git log -n1 --pretty="format:%at" $commit')
 	date := time.unix(commit_date.int())
+	//
+	os.chdir(fast_dir)
 	mut out := os.create('table.html') ?
 	// Place the new row on top
 	html_message := message.replace_each(['<', '&lt;', '>', '&gt;'])
@@ -69,6 +87,8 @@ fn main() {
 		<td>${check}ms</td>
 		<td>${cgen}ms</td>
 		<td>${scan}ms</td>
+		<td>$vlines</td>
+		<td>${int(f64(vlines) / f64(diff1) * 1000.0)}</td>
 	</tr>\n' +
 		table.trim_space()
 	out.writeln(table) ?
@@ -87,7 +107,7 @@ fn main() {
 }
 
 fn exec(s string) string {
-	e := os.execute_or_panic(s)
+	e := os.execute_or_exit(s)
 	return e.output.trim_right('\r\n')
 }
 
@@ -102,7 +122,7 @@ fn measure(cmd string, description string) int {
 	mut runs := []int{}
 	for r in 0 .. 5 {
 		println('  Sample ${r + 1}/5')
-		sw := time.new_stopwatch({})
+		sw := time.new_stopwatch()
 		exec(cmd)
 		runs << int(sw.elapsed().milliseconds())
 	}
@@ -116,9 +136,10 @@ fn measure(cmd string, description string) int {
 	return int(sum / 3)
 }
 
-fn measure_steps(vdir string) (int, int, int, int) {
-	resp := os.execute_or_panic('$vdir/vprod -o v.c -show-timings $vdir/cmd/v')
-	mut scan, mut parse, mut check, mut cgen := 0, 0, 0, 0
+fn measure_steps(vdir string) (int, int, int, int, int) {
+	resp := os.execute_or_exit('$vdir/vprod $voptions -o v.c cmd/v')
+
+	mut scan, mut parse, mut check, mut cgen, mut vlines := 0, 0, 0, 0, 0
 	lines := resp.output.split_into_lines()
 	if lines.len == 3 {
 		parse = lines[0].before('.').int()
@@ -140,8 +161,16 @@ fn measure_steps(vdir string) (int, int, int, int) {
 				if line[1] == 'C GEN' {
 					cgen = line[0].int()
 				}
+			} else {
+				// Fetch number of V lines
+				if line[0].contains('V') && line[0].contains('source') && line[0].contains('size') {
+					start := line[0].index(':') or { 0 }
+					end := line[0].index('lines,') or { 0 }
+					s := line[0][start + 1..end]
+					vlines = s.trim_space().int()
+				}
 			}
 		}
 	}
-	return scan, parse, check, cgen
+	return scan, parse, check, cgen, vlines
 }

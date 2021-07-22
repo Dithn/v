@@ -4,8 +4,8 @@ mut:
 	buffer []&T
 }
 
-fn (mut s MyStruct<T>) add<T>(e &T) bool {
-	s.buffer[0] = e
+fn (mut s MyStruct<T>) add(e &T) bool {
+	s.buffer[0] = unsafe { e }
 	return true
 }
 

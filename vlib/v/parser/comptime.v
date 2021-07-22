@@ -9,7 +9,7 @@ import v.pref
 import v.token
 
 const (
-	supported_comptime_calls = ['html', 'tmpl', 'env', 'embed_file']
+	supported_comptime_calls = ['html', 'tmpl', 'env', 'embed_file', 'pkgconfig']
 )
 
 // // #include, #flag, #v
@@ -45,7 +45,7 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 	}
 	p.check(.dollar)
 	start_pos := p.prev_tok.position()
-	error_msg := 'only `\$tmpl()`, `\$env()`, `\$embed_file()` and `\$vweb.html()` comptime functions are supported right now'
+	error_msg := 'only `\$tmpl()`, `\$env()`, `\$embed_file()`, `\$pkgconfig()` and `\$vweb.html()` comptime functions are supported right now'
 	if p.peek_tok.kind == .dot {
 		n := p.check_name() // skip `vweb.html()` TODO
 		if n != 'vweb' {
@@ -62,9 +62,9 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 	is_embed_file := n == 'embed_file'
 	is_html := n == 'html'
 	// $env('ENV_VAR_NAME')
+	p.check(.lpar)
+	spos := p.tok.position()
 	if n == 'env' {
-		p.check(.lpar)
-		spos := p.tok.position()
 		s := p.tok.lit
 		p.check(.string)
 		p.check(.rpar)
@@ -77,8 +77,19 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 			pos: spos.extend(p.prev_tok.position())
 		}
 	}
-	p.check(.lpar)
-	spos := p.tok.position()
+	if n == 'pkgconfig' {
+		s := p.tok.lit
+		p.check(.string)
+		p.check(.rpar)
+		return ast.ComptimeCall{
+			scope: 0
+			method_name: n
+			args_var: s
+			is_pkgconfig: true
+			env_pos: spos
+			pos: spos.extend(p.prev_tok.position())
+		}
+	}
 	literal_string_param := if is_html { '' } else { p.tok.lit }
 	path_of_literal_string_param := literal_string_param.replace('/', os.path_separator)
 	if !is_html {
@@ -140,8 +151,8 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 		path = os.join_path(dir, tmpl_path)
 	}
 	if !os.exists(path) {
-		// can be in `templates/`
 		if is_html {
+			// can be in `templates/`
 			path = os.join_path(dir, 'templates', fn_path_joined)
 			path += '.html'
 		}
@@ -151,6 +162,7 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 					scope: 0
 					is_vweb: true
 					method_name: n
+					args_var: literal_string_param
 					pos: start_pos.extend(p.prev_tok.position())
 				}
 			}
@@ -176,7 +188,7 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 	}
 	mut scope := &ast.Scope{
 		start_pos: 0
-		parent: p.global_scope
+		parent: p.table.global_scope
 	}
 	$if trace_comptime ? {
 		println('')
@@ -185,11 +197,8 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 		println('>>> end of template END')
 		println('')
 	}
-	mut file := parse_comptime(v_code, p.table, p.pref, scope, p.global_scope)
-	file = ast.File{
-		...file
-		path: tmpl_path
-	}
+	mut file := parse_comptime(v_code, p.table, p.pref, scope)
+	file.path = tmpl_path
 	// copy vars from current fn scope into vweb_tmpl scope
 	for stmt in file.stmts {
 		if stmt is ast.FnDecl {
@@ -253,8 +262,15 @@ fn (mut p Parser) comp_for() ast.CompFor {
 			pos: var_pos
 		})
 		kind = .fields
+	} else if for_val == 'attributes' {
+		p.scope.register(ast.Var{
+			name: val_var
+			typ: p.table.find_type_idx('StructAttribute')
+			pos: var_pos
+		})
+		kind = .attributes
 	} else {
-		p.error_with_pos('unknown kind `$for_val`, available are: `methods` or `fields`',
+		p.error_with_pos('unknown kind `$for_val`, available are: `methods`, `fields` or `attributes`',
 			p.prev_tok.position())
 		return ast.CompFor{}
 	}

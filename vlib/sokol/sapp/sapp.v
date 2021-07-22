@@ -7,7 +7,9 @@ pub const (
 )
 
 // Android needs a global reference to `g_desc`
-__global ( g_desc C.sapp_desc )
+__global (
+	g_desc C.sapp_desc
+)
 
 pub fn create_desc() C.sg_desc {
 	metal_desc := C.sg_metal_context_desc{
@@ -82,6 +84,16 @@ pub fn show_mouse(visible bool) {
 [inline]
 pub fn mouse_shown() bool {
 	return C.sapp_mouse_shown()
+}
+
+[inline]
+pub fn lock_mouse(locked bool) {
+	C.sapp_lock_mouse(locked)
+}
+
+[inline]
+pub fn mouse_locked() bool {
+	return C.sapp_mouse_locked()
 }
 
 // return the userdata pointer optionally provided in sapp_desc

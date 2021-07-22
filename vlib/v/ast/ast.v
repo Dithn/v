@@ -12,10 +12,10 @@ pub type TypeDecl = AliasTypeDecl | FnTypeDecl | SumTypeDecl
 pub type Expr = AnonFn | ArrayDecompose | ArrayInit | AsCast | Assoc | AtExpr | BoolLiteral |
 	CTempVar | CallExpr | CastExpr | ChanInit | CharLiteral | Comment | ComptimeCall |
 	ComptimeSelector | ConcatExpr | DumpExpr | EmptyExpr | EnumVal | FloatLiteral | GoExpr |
-	Ident | IfExpr | IfGuardExpr | IndexExpr | InfixExpr | IntegerLiteral | Likely | LockExpr |
-	MapInit | MatchExpr | NodeError | None | OffsetOf | OrExpr | ParExpr | PostfixExpr |
-	PrefixExpr | RangeExpr | SelectExpr | SelectorExpr | SizeOf | SqlExpr | StringInterLiteral |
-	StringLiteral | StructInit | TypeNode | TypeOf | UnsafeExpr
+	Ident | IfExpr | IfGuardExpr | IndexExpr | InfixExpr | IntegerLiteral | IsRefType |
+	Likely | LockExpr | MapInit | MatchExpr | NodeError | None | OffsetOf | OrExpr | ParExpr |
+	PostfixExpr | PrefixExpr | RangeExpr | SelectExpr | SelectorExpr | SizeOf | SqlExpr |
+	StringInterLiteral | StringLiteral | StructInit | TypeNode | TypeOf | UnsafeExpr
 
 pub type Stmt = AsmStmt | AssertStmt | AssignStmt | Block | BranchStmt | CompFor | ConstDecl |
 	DeferStmt | EmptyStmt | EnumDecl | ExprStmt | FnDecl | ForCStmt | ForInStmt | ForStmt |
@@ -29,7 +29,7 @@ pub type ScopeObject = AsmRegister | ConstField | GlobalField | Var
 // TODO: replace Param
 pub type Node = CallArg | ConstField | EmptyNode | EnumField | Expr | File | GlobalField |
 	IfBranch | MatchBranch | NodeError | Param | ScopeObject | SelectBranch | Stmt | StructField |
-	StructInitField | SumTypeVariant
+	StructInitField
 
 pub struct TypeNode {
 pub:
@@ -179,7 +179,6 @@ pub:
 	pos              token.Position
 	type_pos         token.Position
 	comments         []Comment
-	default_expr     Expr
 	has_default_expr bool
 	attrs            []Attr
 	is_pub           bool
@@ -187,6 +186,7 @@ pub:
 	is_mut           bool
 	is_global        bool
 pub mut:
+	default_expr     Expr
 	default_expr_typ Type
 	name             string
 	typ              Type
@@ -213,6 +213,9 @@ pub:
 pub mut:
 	typ      Type      // the type of the const field, it can be any type in V
 	comments []Comment // comments before current const field
+	// the comptime_expr_value field is filled by the checker, when it has enough
+	// info to evaluate the constant at compile time
+	comptime_expr_value ComptTimeConstValue = empty_comptime_const_expr()
 }
 
 // const declaration
@@ -249,38 +252,47 @@ pub mut:
 
 pub struct Embed {
 pub:
-	typ Type
-	pos token.Position
+	typ      Type
+	pos      token.Position
+	comments []Comment
 }
 
-pub struct StructEmbedding {
+pub struct InterfaceEmbedding {
 pub:
-	name string
-	typ  Type
-	pos  token.Position
+	name     string
+	typ      Type
+	pos      token.Position
+	comments []Comment
 }
 
 pub struct InterfaceDecl {
 pub:
-	name         string
-	name_pos     token.Position
-	field_names  []string
-	is_pub       bool
-	methods      []FnDecl
-	mut_pos      int // mut:
-	fields       []StructField
-	pos          token.Position
-	pre_comments []Comment
+	name          string
+	typ           Type
+	name_pos      token.Position
+	language      Language
+	field_names   []string
+	is_pub        bool
+	mut_pos       int // mut:
+	pos           token.Position
+	pre_comments  []Comment
+	generic_types []Type
+pub mut:
+	methods []FnDecl
+	fields  []StructField
+	//
+	ifaces              []InterfaceEmbedding
+	are_ifaces_expanded bool
 }
 
 pub struct StructInitField {
 pub:
-	expr          Expr
 	pos           token.Position
 	name_pos      token.Position
 	comments      []Comment
 	next_comments []Comment
 pub mut:
+	expr          Expr
 	name          string
 	typ           Type
 	expected_type Type
@@ -351,16 +363,18 @@ pub struct FnDecl {
 pub:
 	name            string
 	mod             string
-	params          []Param
 	is_deprecated   bool
 	is_pub          bool
 	is_variadic     bool
 	is_anon         bool
+	is_noreturn     bool           // true, when [noreturn] is used on a fn
 	is_manualfree   bool           // true, when [manualfree] is used on a fn
 	is_main         bool           // true for `fn main()`
 	is_test         bool           // true for `fn test_abcde`
 	is_conditional  bool           // true for `[if abc] fn abc(){}`
+	is_exported     bool           // true for `[export: 'exact_C_name']`
 	is_keep_alive   bool           // passed memory must not be freed (by GC) before function returns
+	is_unsafe       bool           // true, when [unsafe] is used on a fn
 	receiver        StructField    // TODO this is not a struct field
 	receiver_pos    token.Position // `(u User)` in `fn (u User) name()` position
 	is_method       bool
@@ -376,20 +390,22 @@ pub:
 	generic_names   []string
 	is_direct_arr   bool // direct array access
 	attrs           []Attr
-	skip_gen        bool // this function doesn't need to be generated (for example [if foo])
+	ctdefine_idx    int = -1 // the index in fn.attrs of `[if xyz]`, when such attribute exists
 pub mut:
-	stmts             []Stmt
-	defer_stmts       []DeferStmt
-	return_type       Type
-	return_type_pos   token.Position // `string` in `fn (u User) name() string` position
-	has_return        bool
-	comments          []Comment // comments *after* the header, but *before* `{`; used for InterfaceDecl
-	next_comments     []Comment // coments that are one line after the decl; used for InterfaceDecl
-	source_file       &File = 0
-	scope             &Scope
-	label_names       []string
-	pos               token.Position // function declaration position
-	cur_generic_types []Type
+	params          []Param
+	stmts           []Stmt
+	defer_stmts     []DeferStmt
+	return_type     Type
+	return_type_pos token.Position // `string` in `fn (u User) name() string` position
+	has_return      bool
+	//
+	comments      []Comment      // comments *after* the header, but *before* `{`; used for InterfaceDecl
+	next_comments []Comment // coments that are one line after the decl; used for InterfaceDecl
+	//
+	source_file &File = 0
+	scope       &Scope
+	label_names []string
+	pos         token.Position // function declaration position
 }
 
 // break, continue
@@ -411,6 +427,7 @@ pub mut:
 	is_method          bool
 	is_field           bool // temp hack, remove ASAP when re-impl CallExpr / Selector (joe)
 	is_keep_alive      bool // GC must not free arguments before fn returns
+	is_noreturn        bool // whether the function/method is marked as [noreturn]
 	args               []CallArg
 	expected_arg_types []Type
 	language           Language
@@ -420,8 +437,8 @@ pub mut:
 	receiver_type      Type // User
 	return_type        Type
 	should_be_skipped  bool
-	generic_types      []Type
-	generic_list_pos   token.Position
+	concrete_types     []Type // concrete types, e.g. <int, string>
+	concrete_list_pos  token.Position
 	free_receiver      bool // true if the receiver expression needs to be freed
 	scope              &Scope
 	from_embed_type    Type // holds the type of the embed that the method is called from
@@ -439,9 +456,9 @@ pub struct CallArg {
 pub:
 	is_mut   bool
 	share    ShareType
-	expr     Expr
 	comments []Comment
 pub mut:
+	expr            Expr
 	typ             Type
 	is_tmp_autofree bool // this tells cgen that a tmp variable has to be used for the arg expression in order to free it after the call
 	pos             token.Position
@@ -452,9 +469,9 @@ pub mut:
 pub struct Return {
 pub:
 	pos      token.Position
-	exprs    []Expr
 	comments []Comment
 pub mut:
+	exprs []Expr
 	types []Type
 }
 
@@ -493,8 +510,10 @@ pub mut:
 	is_changed bool // to detect mutable vars that are never changed
 	//
 	// (for setting the position after the or block for autofree)
-	is_or  bool // `x := foo() or { ... }`
-	is_tmp bool // for tmp for loop vars, so that autofree can skip them
+	is_or        bool // `x := foo() or { ... }`
+	is_tmp       bool // for tmp for loop vars, so that autofree can skip them
+	is_auto_heap bool // value whoes address goes out of scope
+	is_stack_obj bool // may be pointer to stack value (`mut` or `&` arg and not [heap] struct)
 }
 
 // used for smartcasting only
@@ -519,6 +538,7 @@ pub:
 	expr     Expr
 	has_expr bool
 	pos      token.Position
+	typ_pos  token.Position
 pub mut:
 	typ      Type
 	comments []Comment
@@ -542,16 +562,17 @@ pub:
 // Each V source file is represented by one File structure.
 // When the V compiler runs, the parser will fill an []File.
 // That array is then passed to V's checker.
+[heap]
 pub struct File {
 pub:
-	path         string // absolute path of the source file - '/projects/v/file.v'
-	path_base    string // file name - 'file.v' (useful for tracing)
-	lines        int    // number of source code lines in the file (including newlines and comments)
-	bytes        int    // number of processed source code bytes
+	nr_lines     int    // number of source code lines in the file (including newlines and comments)
+	nr_bytes     int    // number of processed source code bytes
 	mod          Module // the module of the source file (from `module xyz` at the top)
 	global_scope &Scope
 	is_test      bool // true for _test.v files
 pub mut:
+	path             string // absolute path of the source file - '/projects/v/file.v'
+	path_base        string // file name - 'file.v' (useful for tracing)
 	scope            &Scope
 	stmts            []Stmt            // all the statements in the source file
 	imports          []Import          // all the imports
@@ -617,6 +638,7 @@ pub:
 	tok_kind token.Kind
 	pos      token.Position
 	mut_pos  token.Position
+	comptime bool
 pub mut:
 	scope  &Scope
 	obj    ScopeObject
@@ -704,6 +726,7 @@ pub mut:
 	is_expr  bool
 	typ      Type
 	has_else bool
+	// implements bool // comptime $if implements interface
 }
 
 pub struct IfBranch {
@@ -713,8 +736,9 @@ pub:
 	body_pos token.Position
 	comments []Comment
 pub mut:
-	stmts []Stmt
-	scope &Scope
+	pkg_exist bool
+	stmts     []Stmt
+	scope     &Scope
 }
 
 pub struct UnsafeExpr {
@@ -729,9 +753,11 @@ pub:
 	is_rlock []bool
 	pos      token.Position
 pub mut:
-	lockeds []Ident // `x`, `y` in `lock x, y {`
-	is_expr bool
-	typ     Type
+	lockeds  []Expr // `x`, `y.z` in `lock x, y.z {`
+	comments []Comment
+	is_expr  bool
+	typ      Type
+	scope    &Scope
 }
 
 pub struct MatchExpr {
@@ -751,13 +777,14 @@ pub mut:
 
 pub struct MatchBranch {
 pub:
-	exprs         []Expr      // left side
 	ecmnts        [][]Comment // inline comments for each left side expr
 	stmts         []Stmt      // right side
 	pos           token.Position
 	is_else       bool
-	post_comments []Comment // comments below ´... }´
+	post_comments []Comment      // comments below ´... }´
+	branch_pos    token.Position // for checker errors about invalid branches
 pub mut:
+	exprs []Expr // left side
 	scope &Scope
 }
 
@@ -785,6 +812,7 @@ pub:
 pub enum CompForKind {
 	methods
 	fields
+	attributes
 }
 
 pub struct CompFor {
@@ -883,13 +911,14 @@ pub mut:
 	has_cross_var bool
 }
 
+// `expr as Ident`
 pub struct AsCast {
 pub:
-	expr Expr
-	typ  Type
+	expr Expr // from expr: `expr` in `expr as Ident`
+	typ  Type // to type
 	pos  token.Position
 pub mut:
-	expr_type Type
+	expr_type Type // from type
 }
 
 // an enum value, like OS.macos or .macos
@@ -940,19 +969,14 @@ pub:
 // New implementation of sum types
 pub struct SumTypeDecl {
 pub:
-	name     string
-	is_pub   bool
-	pos      token.Position
-	comments []Comment
-	typ      Type
+	name          string
+	is_pub        bool
+	pos           token.Position
+	comments      []Comment
+	typ           Type
+	generic_types []Type
 pub mut:
-	variants []SumTypeVariant
-}
-
-pub struct SumTypeVariant {
-pub:
-	typ Type
-	pos token.Position
+	variants []TypeNode
 }
 
 pub struct FnTypeDecl {
@@ -973,8 +997,9 @@ pub:
 	stmts []Stmt
 	pos   token.Position
 pub mut:
-	ifdef     string
-	idx_in_fn int = -1 // index in FnDecl.defer_stmts
+	defer_vars []Ident
+	ifdef      string
+	idx_in_fn  int = -1 // index in FnDecl.defer_stmts
 }
 
 // `(3+4)`
@@ -1076,27 +1101,28 @@ pub:
 // .in_prexpr is also needed because of that, because the checker needs to
 // show warnings about the deprecated C->V conversions `string(x)` and
 // `string(x,y)`, while skipping the real pointer casts like `&string(x)`.
+// 2021/07/17: TODO: since 6edfb2c, the above is fixed at the parser level,
+// we need to remove the hacks/special cases in vfmt and the checker too.
 pub struct CastExpr {
 pub:
-	expr Expr // `buf` in `string(buf, n)`
-	arg  Expr // `n` in `string(buf, n)`
-	typ  Type // `string` TODO rename to `type_to_cast_to`
-	pos  token.Position
+	arg Expr // `n` in `string(buf, n)`
 pub mut:
-	typname   string // TypeSymbol.name
-	expr_type Type   // `byteptr`
-	has_arg   bool
-	in_prexpr bool // is the parent node a PrefixExpr
+	typ       Type   // `string`
+	expr      Expr   // `buf` in `string(buf, n)` and `&Type(buf)`
+	typname   string // `&Type` in `&Type(buf)`
+	expr_type Type   // `byteptr`, the type of the `buf` expression
+	has_arg   bool   // true for `string(buf, n)`, false for `&Type(buf)`
+	pos       token.Position
 }
 
 pub struct AsmStmt {
 pub:
-	arch         pref.Arch
-	is_top_level bool
-	is_volatile  bool
-	is_goto      bool
-	clobbered    []AsmClobbered
-	pos          token.Position
+	arch        pref.Arch
+	is_basic    bool
+	is_volatile bool
+	is_goto     bool
+	clobbered   []AsmClobbered
+	pos         token.Position
 pub mut:
 	templates     []AsmTemplate
 	scope         &Scope
@@ -1173,7 +1199,7 @@ pub mut:
 pub struct AsmIO {
 pub:
 	alias      string    // [alias_a]
-	constraint string    // '=r'
+	constraint string    // '=r' TODO: allow all backends to easily use this with a struct
 	expr       Expr      // (a)
 	comments   []Comment // // this is a comment
 	typ        Type
@@ -1183,7 +1209,7 @@ pub:
 pub const (
 	// reference: https://en.wikipedia.org/wiki/X86#/media/File:Table_of_x86_Registers_svg.svg
 	// map register size -> register name
-	x86_no_number_register_list   = map{
+	x86_no_number_register_list = map{
 		8:  ['al', 'ah', 'bl', 'bh', 'cl', 'ch', 'dl', 'dh', 'bpl', 'sil', 'dil', 'spl']
 		16: ['ax', 'bx', 'cx', 'dx', 'bp', 'si', 'di', 'sp', /* segment registers */ 'cs', 'ss',
 			'ds', 'es', 'fs', 'gs', 'flags', 'ip', /* task registers */ 'gdtr', 'idtr', 'tr', 'ldtr',
@@ -1326,6 +1352,15 @@ pub mut:
 	typ Type
 }
 
+pub struct IsRefType {
+pub:
+	is_type bool
+	expr    Expr // checker uses this to set typ
+	pos     token.Position
+pub mut:
+	typ Type
+}
+
 pub struct OffsetOf {
 pub:
 	struct_type Type
@@ -1359,10 +1394,10 @@ pub mut:
 
 pub struct Comment {
 pub:
-	text     string
-	is_multi bool
-	line_nr  int
-	pos      token.Position
+	text      string
+	is_multi  bool // true only for /* comment */, that use many lines
+	is_inline bool // true for all /* comment */ comments
+	pos       token.Position
 }
 
 pub struct ConcatExpr {
@@ -1412,6 +1447,8 @@ pub:
 	//
 	is_env  bool
 	env_pos token.Position
+	//
+	is_pkgconfig bool
 pub mut:
 	sym         TypeSymbol
 	result_type Type
@@ -1434,8 +1471,15 @@ pub enum SqlStmtKind {
 
 pub struct SqlStmt {
 pub:
+	pos     token.Position
+	db_expr Expr // `db` in `sql db {`
+pub mut:
+	lines []SqlStmtLine
+}
+
+pub struct SqlStmtLine {
+pub:
 	kind            SqlStmtKind
-	db_expr         Expr   // `db` in `sql db {`
 	object_var_name string // `user`
 	pos             token.Position
 	where_expr      Expr
@@ -1444,7 +1488,7 @@ pub:
 pub mut:
 	table_expr  TypeNode
 	fields      []StructField
-	sub_structs map[int]SqlStmt
+	sub_structs map[int]SqlStmtLine
 }
 
 pub struct SqlExpr {
@@ -1497,10 +1541,10 @@ pub fn (expr Expr) position() token.Position {
 		}
 		NodeError, ArrayDecompose, ArrayInit, AsCast, Assoc, AtExpr, BoolLiteral, CallExpr,
 		CastExpr, ChanInit, CharLiteral, ConcatExpr, Comment, ComptimeCall, ComptimeSelector,
-		EnumVal, DumpExpr, FloatLiteral, GoExpr, Ident, IfExpr, IntegerLiteral, Likely, LockExpr,
-		MapInit, MatchExpr, None, OffsetOf, OrExpr, ParExpr, PostfixExpr, PrefixExpr, RangeExpr,
-		SelectExpr, SelectorExpr, SizeOf, SqlExpr, StringInterLiteral, StringLiteral, StructInit,
-		TypeNode, TypeOf, UnsafeExpr {
+		EnumVal, DumpExpr, FloatLiteral, GoExpr, Ident, IfExpr, IntegerLiteral, IsRefType, Likely,
+		LockExpr, MapInit, MatchExpr, None, OffsetOf, OrExpr, ParExpr, PostfixExpr, PrefixExpr,
+		RangeExpr, SelectExpr, SelectorExpr, SizeOf, SqlExpr, StringInterLiteral, StringLiteral,
+		StructInit, TypeNode, TypeOf, UnsafeExpr {
 			return expr.pos
 		}
 		IndexExpr {
@@ -1558,7 +1602,7 @@ pub fn (expr Expr) is_expr() bool {
 
 pub fn (expr Expr) is_lit() bool {
 	return match expr {
-		BoolLiteral, StringLiteral, IntegerLiteral { true }
+		BoolLiteral, CharLiteral, StringLiteral, IntegerLiteral { true }
 		else { false }
 	}
 }
@@ -1580,6 +1624,21 @@ pub fn (expr Expr) is_auto_deref_var() bool {
 		else {}
 	}
 	return false
+}
+
+// returns if an expression can be used in `lock x, y.z {`
+pub fn (e &Expr) is_lockable() bool {
+	match e {
+		Ident {
+			return true
+		}
+		SelectorExpr {
+			return e.expr.is_lockable()
+		}
+		else {
+			return false
+		}
+	}
 }
 
 // check if stmt can be an expression in C
@@ -1648,8 +1707,7 @@ pub fn (node Node) position() token.Position {
 		StructField {
 			return node.pos.extend(node.type_pos)
 		}
-		MatchBranch, SelectBranch, EnumField, ConstField, StructInitField, GlobalField, CallArg,
-		SumTypeVariant {
+		MatchBranch, SelectBranch, EnumField, ConstField, StructInitField, GlobalField, CallArg {
 			return node.pos
 		}
 		Param {
@@ -1797,7 +1855,7 @@ pub fn (node Node) children() []Node {
 			}
 			TypeDecl {
 				if node is SumTypeDecl {
-					children << node.variants.map(Node(it))
+					children << node.variants.map(Node(Expr(it)))
 				}
 			}
 			else {}
@@ -1869,17 +1927,17 @@ pub fn all_registers(mut t Table, arch pref.Arch) map[string]ScopeObject {
 				}
 			}
 		}
-		.aarch32 {
-			aarch32 := gen_all_registers(mut t, ast.arm_no_number_register_list, ast.arm_with_number_register_list,
+		.arm32 {
+			arm32 := gen_all_registers(mut t, ast.arm_no_number_register_list, ast.arm_with_number_register_list,
 				32)
-			for k, v in aarch32 {
+			for k, v in arm32 {
 				res[k] = v
 			}
 		}
-		.aarch64 {
-			aarch64 := gen_all_registers(mut t, ast.arm_no_number_register_list, ast.arm_with_number_register_list,
+		.arm64 {
+			arm64 := gen_all_registers(mut t, ast.arm_no_number_register_list, ast.arm_with_number_register_list,
 				64)
-			for k, v in aarch64 {
+			for k, v in arm64 {
 				res[k] = v
 			}
 		}

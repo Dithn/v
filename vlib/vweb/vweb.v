@@ -8,19 +8,43 @@ import io
 import net
 import net.http
 import net.urllib
-import strings
 import time
 
 pub const (
-	methods_with_form       = [http.Method.post, .put, .patch]
-	header_server           = 'Server: VWeb\r\n'
-	header_connection_close = 'Connection: close\r\n'
-	headers_close           = '$header_server$header_connection_close\r\n'
-	// TODO: use http.response structs
-	http_400                = 'HTTP/1.1 400 Bad Request\r\nContent-Type: text/plain\r\nContent-Length: 15\r\n${headers_close}400 Bad Request'
-	http_404                = 'HTTP/1.1 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 13\r\n${headers_close}404 Not Found'
-	http_500                = 'HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\n${headers_close}500 Internal Server Error'
-	mime_types              = map{
+	methods_with_form = [http.Method.post, .put, .patch]
+	headers_close     = http.new_custom_header_from_map(map{
+		'Server':          'VWeb'
+		http.CommonHeader.connection.str(): 'close'
+	}) or { panic('should never fail') }
+
+	http_400          = http.Response{
+		version: .v1_1
+		status_code: 400
+		text: '400 Bad Request'
+		header: http.new_header_from_map(map{
+			http.CommonHeader.content_type:   'text/plain'
+			http.CommonHeader.content_length: '15'
+		}).join(headers_close)
+	}
+	http_404 = http.Response{
+		version: .v1_1
+		status_code: 404
+		text: '404 Not Found'
+		header: http.new_header_from_map(map{
+			http.CommonHeader.content_type:   'text/plain'
+			http.CommonHeader.content_length: '13'
+		}).join(headers_close)
+	}
+	http_500 = http.Response{
+		version: .v1_1
+		status_code: 500
+		text: '500 Internal Server Error'
+		header: http.new_header_from_map(map{
+			http.CommonHeader.content_type:   'text/plain'
+			http.CommonHeader.content_length: '25'
+		}).join(headers_close)
+	}
+	mime_types = map{
 		'.css':  'text/css; charset=utf-8'
 		'.gif':  'image/gif'
 		'.htm':  'text/html; charset=utf-8'
@@ -35,9 +59,10 @@ pub const (
 		'.txt':  'text/plain; charset=utf-8'
 		'.wasm': 'application/wasm'
 		'.xml':  'text/xml; charset=utf-8'
+		'.ico':  'img/x-icon'
 	}
-	max_http_post_size      = 1024 * 1024
-	default_port            = 8080
+	max_http_post_size = 1024 * 1024
+	default_port       = 8080
 )
 
 pub struct Context {
@@ -54,12 +79,10 @@ pub mut:
 	form              map[string]string
 	query             map[string]string
 	files             map[string][]FileData
-	headers           string // response headers
+	header            http.Header // response headers
 	done              bool
 	page_gen_start    i64
 	form_error        string
-	chunked_transfer  bool
-	max_chunk_len     int = 20
 }
 
 struct FileData {
@@ -104,47 +127,20 @@ pub fn (mut ctx Context) send_response_to_client(mimetype string, res string) bo
 		return false
 	}
 	ctx.done = true
-	mut sb := strings.new_builder(1024)
-	defer {
-		unsafe { sb.free() }
+
+	// build header
+	header := http.new_header_from_map(map{
+		http.CommonHeader.content_type:   mimetype
+		http.CommonHeader.content_length: res.len.str()
+	}).join(ctx.header)
+
+	resp := http.Response{
+		version: .v1_1
+		status_code: ctx.status.int() // TODO: change / remove ctx.status
+		header: header.join(vweb.headers_close)
+		text: res
 	}
-	sb.write_string('HTTP/1.1 $ctx.status')
-	sb.write_string('\r\nContent-Type: $mimetype')
-	sb.write_string('\r\nContent-Length: $res.len')
-	if ctx.chunked_transfer {
-		sb.write_string('\r\nTransfer-Encoding: chunked')
-	}
-	sb.write_string(ctx.headers)
-	sb.write_string('\r\n')
-	sb.write_string(vweb.headers_close)
-	if ctx.chunked_transfer {
-		mut i := 0
-		mut len := res.len
-		for {
-			if len <= 0 {
-				break
-			}
-			mut chunk := ''
-			if len > ctx.max_chunk_len {
-				chunk = res[i..i + ctx.max_chunk_len]
-				i += ctx.max_chunk_len
-				len -= ctx.max_chunk_len
-			} else {
-				chunk = res[i..]
-				len = 0
-			}
-			sb.write_string(chunk.len.hex())
-			sb.write_string('\r\n$chunk\r\n')
-		}
-		sb.write_string('0\r\n\r\n') // End of chunks
-	} else {
-		sb.write_string(res)
-	}
-	s := sb.str()
-	defer {
-		unsafe { s.free() }
-	}
-	send_string(mut ctx.conn, s) or { return false }
+	send_string(mut ctx.conn, resp.bytestr()) or { return false }
 	return true
 }
 
@@ -180,7 +176,7 @@ pub fn (mut ctx Context) server_error(ecode int) Result {
 	if ctx.done {
 		return Result{}
 	}
-	send_string(mut ctx.conn, vweb.http_500) or {}
+	send_string(mut ctx.conn, vweb.http_500.bytestr()) or {}
 	return Result{}
 }
 
@@ -190,7 +186,7 @@ pub fn (mut ctx Context) redirect(url string) Result {
 		return Result{}
 	}
 	ctx.done = true
-	send_string(mut ctx.conn, 'HTTP/1.1 302 Found\r\nLocation: $url$ctx.headers\r\n$vweb.headers_close') or {
+	send_string(mut ctx.conn, 'HTTP/1.1 302 Found\r\nLocation: $url$ctx.header\r\n$vweb.headers_close\r\n') or {
 		return Result{}
 	}
 	return Result{}
@@ -202,14 +198,8 @@ pub fn (mut ctx Context) not_found() Result {
 		return Result{}
 	}
 	ctx.done = true
-	send_string(mut ctx.conn, vweb.http_404) or {}
+	send_string(mut ctx.conn, vweb.http_404.bytestr()) or {}
 	return Result{}
-}
-
-// Enables chunk transfer with max_chunk_len per chunk
-pub fn (mut ctx Context) enable_chunked_transfer(max_chunk_len int) {
-	ctx.chunked_transfer = true
-	ctx.max_chunk_len = max_chunk_len
 }
 
 // Sets a cookie
@@ -251,7 +241,7 @@ pub fn (ctx &Context) get_cookie(key string) ?string { // TODO refactor
 	}
 	cookie_header = ' ' + cookie_header
 	// println('cookie_header="$cookie_header"')
-	// println(ctx.req.headers)
+	// println(ctx.req.header)
 	cookie := if cookie_header.contains(';') {
 		cookie_header.find_between(' $key=', ';')
 	} else {
@@ -274,9 +264,7 @@ pub fn (mut ctx Context) set_status(code int, desc string) {
 
 // Adds an header to the response with key and val
 pub fn (mut ctx Context) add_header(key string, val string) {
-	// println('add_header($key, $val)')
-	ctx.headers = ctx.headers + '\r\n$key: $val'
-	// println(ctx.headers)
+	ctx.header.add_custom(key, val) or {}
 }
 
 // Returns the header data from the key
@@ -284,27 +272,61 @@ pub fn (ctx &Context) get_header(key string) string {
 	return ctx.req.header.get_custom(key) or { '' }
 }
 
+/*
 pub fn run<T>(port int) {
-	mut app := T{}
-	run_app<T>(mut app, port)
+	mut x := &T{}
+	run_app(mut x, port)
+}
+*/
+
+interface DbInterface {
+	db voidptr
 }
 
-pub fn run_app<T>(mut app T, port int) {
-	mut l := net.listen_tcp(port) or { panic('failed to listen') }
+// run_app
+[manualfree]
+pub fn run<T>(global_app &T, port int) {
+	// x := global_app.clone()
+	// mut global_app := &T{}
+	// mut app := &T{}
+	// run_app<T>(mut app, port)
+
+	mut l := net.listen_tcp(.ip6, ':$port') or { panic('failed to listen $err.code $err') }
+
 	println('[Vweb] Running app on http://localhost:$port')
-	app.Context = Context{
-		conn: 0
-	}
-	app.init_server()
-	$for method in T.methods {
-		$if method.return_type is Result {
-			// check routes for validity
-		}
-	}
+	// app.Context = Context{
+	// conn: 0
+	//}
+	// app.init_server()
+	// global_app.init_server()
+	//$for method in T.methods {
+	//$if method.return_type is Result {
+	// check routes for validity
+	//}
+	//}
 	for {
-		mut conn := l.accept() or { panic('accept() failed') }
-		// TODO: running handle_conn concurrently results in a race-condition
-		handle_conn<T>(mut conn, mut app)
+		// Create a new app object for each connection, copy global data like db connections
+		mut request_app := &T{}
+		$if T is DbInterface {
+			request_app.db = global_app.db
+		} $else {
+			// println('vweb no db')
+		}
+		$for field in T.fields {
+			if field.is_shared {
+				request_app.$(field.name) = global_app.$(field.name)
+			}
+		}
+		request_app.Context = global_app.Context // copy the context ref that contains static files map etc
+		// request_app.Context = Context{
+		// conn: 0
+		//}
+		mut conn := l.accept() or {
+			// failures should not panic
+			eprintln('accept() failed with error: $err.msg')
+			continue
+		}
+		go handle_conn<T>(mut conn, mut request_app)
 	}
 }
 
@@ -314,8 +336,11 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 	conn.set_write_timeout(30 * time.second)
 	defer {
 		conn.close() or {}
+		unsafe {
+			free(app)
+		}
 	}
-	mut reader := io.new_buffered_reader(reader: io.make_reader(conn))
+	mut reader := io.new_buffered_reader(reader: conn)
 	defer {
 		reader.free()
 	}
@@ -340,7 +365,7 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 		if 'multipart/form-data' in ct {
 			boundary := ct.filter(it.starts_with('boundary='))
 			if boundary.len != 1 {
-				send_string(mut conn, vweb.http_400) or {}
+				send_string(mut conn, vweb.http_400.bytestr()) or {}
 				return
 			}
 			form, files := parse_multipart_form(req.data, boundary[0][9..])
@@ -359,11 +384,11 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 	}
 	// Serve a static file if it is one
 	// TODO: get the real path
-	url := urllib.parse(app.req.url.to_lower()) or {
+	url := urllib.parse(app.req.url) or {
 		eprintln('error parsing path: $err')
 		return
 	}
-	if serve_static<T>(mut app, url) {
+	if serve_if_static<T>(mut app, url) {
 		// successfully served a static file
 		return
 	}
@@ -419,7 +444,7 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 		}
 	}
 	// site not found
-	send_string(mut conn, vweb.http_404) or {}
+	send_string(mut conn, vweb.http_404.bytestr()) or {}
 }
 
 fn route_matches(url_words []string, route_words []string) ?[]string {
@@ -443,7 +468,7 @@ fn route_matches(url_words []string, route_words []string) ?[]string {
 	}
 
 	// The last route can end with ... indicating an array
-	if !route_words[route_words.len - 1].ends_with('...') {
+	if route_words.len == 0 || !route_words[route_words.len - 1].ends_with('...') {
 		return none
 	}
 
@@ -506,7 +531,8 @@ fn parse_attrs(name string, attrs []string) ?([]http.Method, string) {
 
 // check if request is for a static file and serves it
 // returns true if we served a static file, false otherwise
-fn serve_static<T>(mut app T, url urllib.URL) bool {
+[manualfree]
+fn serve_if_static<T>(mut app T, url urllib.URL) bool {
 	// TODO: handle url parameters properly - for now, ignore them
 	static_file := app.static_files[url.path]
 	mime_type := app.static_mime_types[url.path]
@@ -514,7 +540,7 @@ fn serve_static<T>(mut app T, url urllib.URL) bool {
 		return false
 	}
 	data := os.read_file(static_file) or {
-		send_string(mut app.conn, vweb.http_404) or {}
+		send_string(mut app.conn, vweb.http_404.bytestr()) or {}
 		return true
 	}
 	app.send_response_to_client(mime_type, data)
@@ -534,7 +560,7 @@ fn (mut ctx Context) scan_static_directory(directory_path string, mount_path str
 				// Rudimentary guard against adding files not in mime_types.
 				// Use serve_static directly to add non-standard mime types.
 				if ext in vweb.mime_types {
-					ctx.serve_static(mount_path + '/' + file, full_path, vweb.mime_types[ext])
+					ctx.serve_static(mount_path + '/' + file, full_path)
 				}
 			}
 		}
@@ -572,9 +598,11 @@ pub fn (mut ctx Context) mount_static_folder_at(directory_path string, mount_pat
 
 // Serves a file static
 // `url` is the access path on the site, `file_path` is the real path to the file, `mime_type` is the file type
-pub fn (mut ctx Context) serve_static(url string, file_path string, mime_type string) {
+pub fn (mut ctx Context) serve_static(url string, file_path string) {
 	ctx.static_files[url] = file_path
-	ctx.static_mime_types[url] = mime_type
+	// ctx.static_mime_types[url] = mime_type
+	ext := os.file_ext(file_path)
+	ctx.static_mime_types[url] = vweb.mime_types[ext]
 }
 
 // Returns the ip address from the current user
@@ -595,6 +623,7 @@ pub fn (ctx &Context) ip() string {
 
 // Set s to the form error
 pub fn (mut ctx Context) error(s string) {
+	println('vweb error: $s')
 	ctx.form_error = s
 }
 

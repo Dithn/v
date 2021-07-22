@@ -16,7 +16,7 @@ fn C.realloc(a &byte, b int) &byte
 
 fn C.free(ptr voidptr)
 
-[trusted]
+[noreturn; trusted]
 fn C.exit(code int)
 
 fn C.qsort(base voidptr, items size_t, item_size size_t, cb qsort_callback_func)
@@ -75,6 +75,10 @@ fn C.pclose(stream &C.FILE) int
 [trusted]
 fn C.getpid() int
 
+fn C.getuid() int
+
+fn C.geteuid() int
+
 fn C.system(cmd &char) int
 
 fn C.posix_spawn(child_pid &int, path &char, file_actions voidptr, attrp voidptr, argv &&char, envp &&char) int
@@ -127,8 +131,6 @@ fn C.memset(str voidptr, c int, n size_t) int
 fn C.sigemptyset() int
 
 fn C.getcwd(buf &char, size size_t) &char
-
-fn C.signal(signal int, handlercb voidptr) voidptr
 
 [trusted]
 fn C.mktime() int
@@ -215,6 +217,10 @@ fn C.SetHandleInformation(hObject voidptr, dwMask u32, dw_flags u32) bool
 
 fn C.ExpandEnvironmentStringsW(lpSrc &u16, lpDst &u16, nSize u32) u32
 
+fn C.GetComputerNameW(&u16, &u32) bool
+
+fn C.GetUserNameW(&u16, &u32) bool
+
 [trusted]
 fn C.SendMessageTimeout() u32
 
@@ -240,7 +246,7 @@ fn C.RegSetValueExW(hKey voidptr, lpValueName &u16, Reserved u32, dwType u32, lp
 
 fn C.RegCloseKey(hKey voidptr)
 
-fn C.RemoveDirectory(lpPathName &char) int
+fn C.RemoveDirectory(lpPathName &u16) int
 
 // fn C.GetStdHandle() voidptr
 fn C.GetStdHandle(u32) voidptr
@@ -337,7 +343,7 @@ fn C.closesocket(int) int
 
 fn C.vschannel_init(&C.TlsContext)
 
-fn C.request(&C.TlsContext, int, &u16, &byte, &&byte)
+fn C.request(&C.TlsContext, int, &u16, &byte, &&byte) int
 
 fn C.vschannel_cleanup(&C.TlsContext)
 

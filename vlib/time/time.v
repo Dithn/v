@@ -5,8 +5,6 @@ module time
 
 #include <time.h>
 
-type time_t = i64
-
 pub const (
 	days_string        = 'MonTueWedThuFriSatSun'
 	month_days         = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
@@ -139,7 +137,7 @@ pub fn utc() Time {
 	// in this API call
 	t := C.time(0)
 	_ = C.time(&t)
-	return unix2(int(t), 0)
+	return unix2(i64(t), 0)
 }
 
 // smonth returns month name.
@@ -188,7 +186,7 @@ pub fn (t Time) add(d Duration) Time {
 	microseconds := i64(t.unix) * 1000 * 1000 + t.microsecond + d.microseconds()
 	unix := microseconds / (1000 * 1000)
 	micro := microseconds % (1000 * 1000)
-	return unix2(int(unix), int(micro))
+	return unix2(unix, int(micro))
 }
 
 // add_seconds returns a new time struct with an added number of seconds.
@@ -396,7 +394,7 @@ pub const (
 	second      = Duration(1000 * millisecond)
 	minute      = Duration(60 * second)
 	hour        = Duration(60 * minute)
-	infinite    = Duration(-1)
+	infinite    = Duration(C.INT64_MAX)
 )
 
 // nanoseconds returns the duration as an integer number of nanoseconds.

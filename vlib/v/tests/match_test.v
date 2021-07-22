@@ -19,7 +19,7 @@ fn test_match_integers() {
 			println('three')
 			b = 3
 		}
-		4 {
+		int(4) {
 			println('four')
 		}
 		else {
@@ -139,7 +139,7 @@ fn test_method_call() {
 		1 { false }
 		2 { true }
 		3 { false }
-		else { false }
+		else { true }
 	}
 }
 

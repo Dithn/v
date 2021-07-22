@@ -5,6 +5,7 @@ module util
 
 import os
 import time
+import term
 import v.pref
 import v.vmod
 import v.util.recompilation
@@ -15,7 +16,7 @@ pub const (
 
 // math.bits is needed by strconv.ftoa
 pub const (
-	builtin_module_parts = ['math.bits', 'strconv', 'strconv.ftoa', 'hash', 'strings', 'builtin']
+	builtin_module_parts = ['math.bits', 'strconv', 'strconv.ftoa', 'strings', 'builtin']
 	bundle_modules       = ['clipboard', 'fontstash', 'gg', 'gx', 'sokol', 'szip', 'ui']
 )
 
@@ -247,7 +248,7 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 		if is_verbose {
 			println('Compiling $tool_name with: "$compilation_command"')
 		}
-		tool_compilation := os.execute_or_panic(compilation_command)
+		tool_compilation := os.execute_or_exit(compilation_command)
 		if tool_compilation.exit_code != 0 {
 			eprintln('cannot compile `$tool_source`: \n$tool_compilation.output')
 			exit(1)
@@ -373,25 +374,16 @@ pub fn skip_bom(file_content string) string {
 }
 
 pub fn replace_op(s string) string {
-	if s.len == 1 {
-		last_char := s[s.len - 1]
-		suffix := match last_char {
-			`+` { '_plus' }
-			`-` { '_minus' }
-			`*` { '_mult' }
-			`/` { '_div' }
-			`%` { '_mod' }
-			`<` { '_lt' }
-			`>` { '_gt' }
-			else { '' }
-		}
-		return s[..s.len - 1] + suffix
-	} else {
-		suffix := match s {
-			'==' { '_eq' }
-			else { '' }
-		}
-		return s[..s.len - 2] + suffix
+	return match s {
+		'+' { '_plus' }
+		'-' { '_minus' }
+		'*' { '_mult' }
+		'/' { '_div' }
+		'%' { '_mod' }
+		'<' { '_lt' }
+		'>' { '_gt' }
+		'==' { '_eq' }
+		else { '' }
 	}
 }
 
@@ -577,4 +569,10 @@ pub fn find_all_v_files(roots []string) ?[]string {
 		files << file
 	}
 	return files
+}
+
+// Highlight a command with an on-brand background to make CLI
+// commands immediately recognizable.
+pub fn pretty_print(command string) string {
+	return term.bright_white(term.bg_cyan(' $command '))
 }

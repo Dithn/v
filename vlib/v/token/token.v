@@ -111,6 +111,7 @@ pub enum Kind {
 	key_return
 	key_select
 	key_sizeof
+	key_isreftype
 	key_likely
 	key_unlikely
 	key_offsetof
@@ -267,6 +268,7 @@ fn build_token_str() []string {
 	s[Kind.key_return] = 'return'
 	s[Kind.key_module] = 'module'
 	s[Kind.key_sizeof] = 'sizeof'
+	s[Kind.key_isreftype] = 'isreftype'
 	s[Kind.key_likely] = '_likely_'
 	s[Kind.key_unlikely] = '_unlikely_'
 	s[Kind.key_go] = 'go'
@@ -314,25 +316,25 @@ pub const (
 	keywords = build_keys()
 )
 
-pub fn key_to_token(key string) Kind {
-	return Kind(token.keywords[key])
-}
-
+[inline]
 pub fn is_key(key string) bool {
-	return int(key_to_token(key)) > 0
+	return int(token.keywords[key]) > 0
 }
 
+[inline]
 pub fn is_decl(t Kind) bool {
 	return t in [.key_enum, .key_interface, .key_fn, .key_struct, .key_type, .key_const, .key_pub,
 		.eof,
 	]
 }
 
+[inline]
 pub fn (t Kind) is_assign() bool {
 	return t in token.assign_tokens
 }
 
 // note: used for some code generation, so no quoting
+[inline]
 pub fn (t Kind) str() string {
 	return token.token_str[int(t)]
 }
@@ -434,34 +436,41 @@ const (
 )
 
 // precedence returns a tokens precedence if defined, otherwise lowest_prec
+[inline]
 pub fn (tok Token) precedence() int {
 	return int(token.precedences[tok.kind])
 }
 
 // is_scalar returns true if the token is a scalar
+[inline]
 pub fn (tok Token) is_scalar() bool {
 	return tok.kind in [.number, .string]
 }
 
 // is_unary returns true if the token can be in a unary expression
+[inline]
 pub fn (tok Token) is_unary() bool {
 	// `+` | `-` | `!` | `~` | `*` | `&` | `<-`
 	return tok.kind in [.plus, .minus, .not, .bit_not, .mul, .amp, .arrow]
 }
 
+[inline]
 pub fn (tok Kind) is_relational() bool {
 	// `<` | `<=` | `>` | `>=` | `==` | `!=`
 	return tok in [.lt, .le, .gt, .ge, .eq, .ne]
 }
 
+[inline]
 pub fn (k Kind) is_start_of_type() bool {
 	return k in [.name, .lpar, .amp, .lsbr, .question, .key_shared]
 }
 
+[inline]
 pub fn (kind Kind) is_prefix() bool {
 	return kind in [.minus, .amp, .mul, .not, .bit_not]
 }
 
+[inline]
 pub fn (kind Kind) is_infix() bool {
 	return kind in [.plus, .minus, .mod, .mul, .div, .eq, .ne, .gt, .lt, .key_in, .key_as, .ge,
 		.le, .logical_or, .xor, .not_in, .key_is, .not_is, .and, .dot, .pipe, .amp, .left_shift,
@@ -470,9 +479,9 @@ pub fn (kind Kind) is_infix() bool {
 
 // Pass ast.builtin_type_names
 // Note: can't import table here due to circular module dependency
-pub fn (tok &Token) can_start_type(builtin_type_names []string) bool {
+pub fn (tok &Token) can_start_type(builtin_types []string) bool {
 	match tok.kind {
-		.name { return tok.lit[0].is_capital() || tok.lit in builtin_type_names }
+		.name { return (tok.lit.len > 0 && tok.lit[0].is_capital()) || tok.lit in builtin_types }
 		// Note: return type (T1, T2) should be handled elsewhere
 		.amp, .key_fn, .lsbr, .question { return true }
 		else {}

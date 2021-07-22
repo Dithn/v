@@ -10,7 +10,7 @@ const (
 
 fn testsuite_begin() {
 	eprintln('testsuite_begin, tfolder = $tfolder')
-	os.rmdir_all(tfolder) or { }
+	os.rmdir_all(tfolder) or {}
 	assert !os.is_dir(tfolder)
 	os.mkdir_all(tfolder) or { panic(err) }
 	os.chdir(tfolder)
@@ -19,14 +19,14 @@ fn testsuite_begin() {
 
 fn testsuite_end() {
 	os.chdir(os.wd_at_startup)
-	os.rmdir_all(tfolder) or { }
+	os.rmdir_all(tfolder) or {}
 	assert !os.is_dir(tfolder)
 	// eprintln('testsuite_end  , tfolder = $tfolder removed.')
 }
 
 fn test_temp_file() {
 	// Test defaults
-	mut f, mut path := util.temp_file({}) or {
+	mut f, mut path := util.temp_file() or {
 		assert false
 		return
 	}
@@ -76,7 +76,7 @@ fn test_temp_file() {
 
 fn test_temp_dir() {
 	// Test defaults
-	mut path := util.temp_dir({}) or {
+	mut path := util.temp_dir() or {
 		assert false
 		return
 	}

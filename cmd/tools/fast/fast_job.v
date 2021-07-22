@@ -22,7 +22,7 @@ fn main() {
 			println('failed to git pull. uncommitted changes?')
 			return
 		}
-		// println('running fast')
+		// println('running ./fast')
 		resp := os.execute('./fast')
 		if resp.exit_code < 0 {
 			println(resp.output)
@@ -32,12 +32,12 @@ fn main() {
 			println('resp != 0, skipping')
 		} else {
 			os.chdir('website')
-			os.execute_or_panic('git checkout gh-pages')
+			os.execute_or_exit('git checkout gh-pages')
 			os.cp('../index.html', 'index.html') ?
 			os.system('git commit -am "update benchmark"')
 			os.system('git push origin gh-pages')
 			os.chdir('..')
 		}
-		time.sleep(60 * time.second)
+		time.sleep(180 * time.second)
 	}
 }

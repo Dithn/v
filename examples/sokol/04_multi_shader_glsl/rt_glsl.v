@@ -176,7 +176,7 @@ fn init_cube_glsl_m(mut app App) {
 		Vertex_t{ 1.0,  1.0, -1.0, c,  0, d},
 	]
 
-	mut vert_buffer_desc := C.sg_buffer_desc{}
+	mut vert_buffer_desc := C.sg_buffer_desc{label: c'cube-vertices'}
 	unsafe { C.memset(&vert_buffer_desc, 0, sizeof(vert_buffer_desc)) }
 	vert_buffer_desc.size = size_t(vertices.len * int(sizeof(Vertex_t)))
 	vert_buffer_desc.data = C.sg_range{
@@ -184,7 +184,6 @@ fn init_cube_glsl_m(mut app App) {
 		size: size_t(vertices.len * int(sizeof(Vertex_t)))
 	}
 	vert_buffer_desc.@type = .vertexbuffer
-	vert_buffer_desc.label = 'cube-vertices'.str
 	vbuf := gfx.make_buffer(&vert_buffer_desc)
 
 	/* create an index buffer for the cube */
@@ -199,7 +198,7 @@ fn init_cube_glsl_m(mut app App) {
 */
 	]
 
-	mut index_buffer_desc := C.sg_buffer_desc{}
+	mut index_buffer_desc := C.sg_buffer_desc{label: c'cube-indices'}
 	unsafe { C.memset(&index_buffer_desc, 0, sizeof(index_buffer_desc)) }
 	index_buffer_desc.size = size_t(indices.len * int(sizeof(u16)))
 	index_buffer_desc.data = C.sg_range{
@@ -207,7 +206,6 @@ fn init_cube_glsl_m(mut app App) {
 		size: size_t(indices.len * int(sizeof(u16)))
 	}
 	index_buffer_desc.@type = .indexbuffer
-	index_buffer_desc.label = 'cube-indices'.str
 	ibuf := gfx.make_buffer(&index_buffer_desc)
 
 	// create shader
@@ -284,7 +282,7 @@ fn init_cube_glsl_p(mut app App) {
 		Vertex_t{ 1.0,  1.0, -1.0, c,  0, d},
 	]
 
-	mut vert_buffer_desc := C.sg_buffer_desc{}
+	mut vert_buffer_desc := C.sg_buffer_desc{label: c'cube-vertices'}
 	unsafe { C.memset(&vert_buffer_desc, 0, sizeof(vert_buffer_desc)) }
 	vert_buffer_desc.size = size_t(vertices.len * int(sizeof(Vertex_t)))
 	vert_buffer_desc.data = C.sg_range{
@@ -292,7 +290,6 @@ fn init_cube_glsl_p(mut app App) {
 		size: size_t(vertices.len * int(sizeof(Vertex_t)))
 	}
 	vert_buffer_desc.@type = .vertexbuffer
-	vert_buffer_desc.label = 'cube-vertices'.str
 	vbuf := gfx.make_buffer(&vert_buffer_desc)
 
 	/* create an index buffer for the cube */
@@ -308,7 +305,7 @@ fn init_cube_glsl_p(mut app App) {
 
 	]
 
-	mut index_buffer_desc := C.sg_buffer_desc{}
+	mut index_buffer_desc := C.sg_buffer_desc{label: c'cube-indices'}
 	unsafe { C.memset(&index_buffer_desc, 0, sizeof(index_buffer_desc)) }
 	index_buffer_desc.size = size_t(indices.len * int(sizeof(u16)))
 	index_buffer_desc.data = C.sg_range{
@@ -316,7 +313,6 @@ fn init_cube_glsl_p(mut app App) {
 		size: size_t(indices.len * int(sizeof(u16)))
 	}
 	index_buffer_desc.@type = .indexbuffer
-	index_buffer_desc.label = 'cube-indices'.str
 	ibuf := gfx.make_buffer(&index_buffer_desc)
 
 	// create shader
@@ -417,7 +413,7 @@ fn draw_cube_glsl_m(app App) {
 		0 // padding bytes , see "fs_params" struct paddings in rt_glsl.h
 	]!
 	fs_uniforms_range := C.sg_range{
-		ptr: &tmp_fs_params
+		ptr: unsafe { &tmp_fs_params }
 		size: size_t(sizeof(tmp_fs_params))
 	}
 	gfx.apply_uniforms(C.SG_SHADERSTAGE_FS, C.SLOT_fs_params_p, &fs_uniforms_range)
@@ -469,7 +465,7 @@ fn draw_cube_glsl_p(app App) {
 		0 // padding bytes , see "fs_params" struct paddings in rt_glsl.h
 	]!
 	fs_uniforms_range := C.sg_range{
-		ptr: &tmp_fs_params
+		ptr: unsafe { &tmp_fs_params }
 		size: size_t(sizeof(tmp_fs_params))
 	}
 	gfx.apply_uniforms(C.SG_SHADERSTAGE_FS, C.SLOT_fs_params_p, &fs_uniforms_range)
@@ -623,7 +619,6 @@ fn main() {
 	app.gg = gg.new_context(
 		width: win_width
 		height: win_height
-		use_ortho: true // This is needed for 2D drawing
 		create_window: true
 		window_title: '3D Dual shader Cube - click and rotate with the mouse'
 		user_data: app

@@ -33,9 +33,9 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 			p.tok.position()
 		}
 		if p.tok.kind == .key_else {
-			comments << p.eat_comments({})
+			comments << p.eat_comments()
 			p.check(.key_else)
-			comments << p.eat_comments({})
+			comments << p.eat_comments()
 			if p.tok.kind == .key_match {
 				p.error('cannot use `match` with `if` statements')
 				return ast.IfExpr{}
@@ -54,6 +54,7 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 						typ: ast.error_type
 						pos: p.tok.position()
 						is_used: true
+						is_stack_obj: true
 					})
 				}
 				branches << ast.IfBranch{
@@ -77,7 +78,7 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 			p.error('cannot use `match` with `if` statements')
 			return ast.IfExpr{}
 		}
-		comments << p.eat_comments({})
+		comments << p.eat_comments()
 		mut cond := ast.empty_expr()
 		mut is_guard := false
 		// `if x := opt() {`
@@ -89,9 +90,9 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 			if p.scope.known_var(var_name) {
 				p.error_with_pos('redefinition of `$var_name`', var_pos)
 			}
-			comments << p.eat_comments({})
+			comments << p.eat_comments()
 			p.check(.decl_assign)
-			comments << p.eat_comments({})
+			comments << p.eat_comments()
 			expr := p.expr(0)
 			cond = ast.IfGuardExpr{
 				var_name: var_name
@@ -105,9 +106,11 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 			prev_guard = true
 		} else {
 			prev_guard = false
+			p.comp_if_cond = true
 			cond = p.expr(0)
+			p.comp_if_cond = false
 		}
-		comments << p.eat_comments({})
+		comments << p.eat_comments()
 		end_pos := p.prev_tok.position()
 		body_pos := p.tok.position()
 		p.inside_if = false
@@ -125,13 +128,13 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 		if is_guard {
 			p.close_scope()
 		}
-		comments = p.eat_comments({})
+		comments = p.eat_comments()
 		if is_comptime {
 			if p.tok.kind == .key_else {
 				p.error('use `\$else` instead of `else` in compile-time `if` branches')
 				return ast.IfExpr{}
 			}
-			if p.peek_tok.kind == .key_else {
+			if p.tok.kind != .rcbr && p.peek_tok.kind == .key_else {
 				p.check(.dollar)
 			}
 		}
@@ -164,7 +167,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 	if !no_lcbr {
 		p.check(.lcbr)
 	}
-	comments := p.eat_comments({}) // comments before the first branch
+	comments := p.eat_comments() // comments before the first branch
 	mut branches := []ast.MatchBranch{}
 	for p.tok.kind != .eof {
 		branch_first_pos := p.tok.position()
@@ -177,14 +180,14 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			is_else = true
 			p.next()
 		} else if (p.tok.kind == .name && !(p.tok.lit == 'C' && p.peek_tok.kind == .dot)
-			&& (p.tok.lit in ast.builtin_type_names || p.tok.lit[0].is_capital()
-			|| (p.peek_tok.kind == .dot && p.peek_token(2).lit.len > 0
+			&& (((p.tok.lit in ast.builtin_type_names || p.tok.lit[0].is_capital())
+			&& p.peek_tok.kind != .lpar) || (p.peek_tok.kind == .dot && p.peek_token(2).lit.len > 0
 			&& p.peek_token(2).lit[0].is_capital()))) || p.tok.kind == .lsbr {
 			mut types := []ast.Type{}
 			for {
 				// Sum type match
 				parsed_type := p.parse_type()
-				ecmnts << p.eat_comments({})
+				ecmnts << p.eat_comments()
 				types << parsed_type
 				exprs << ast.TypeNode{
 					typ: parsed_type
@@ -201,7 +204,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			for {
 				p.inside_match_case = true
 				expr := p.expr(0)
-				ecmnts << p.eat_comments({})
+				ecmnts << p.eat_comments()
 				p.inside_match_case = false
 				if p.tok.kind == .dotdot {
 					p.error_with_pos('match only supports inclusive (`...`) ranges, not exclusive (`..`)',
@@ -234,12 +237,14 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 		p.close_scope()
 		p.inside_match_body = false
 		pos := branch_first_pos.extend_with_last_line(branch_last_pos, p.prev_tok.line_nr)
-		post_comments := p.eat_comments({})
+		branch_pos := branch_first_pos.extend_with_last_line(p.tok.position(), p.tok.line_nr)
+		post_comments := p.eat_comments()
 		branches << ast.MatchBranch{
 			exprs: exprs
 			ecmnts: ecmnts
 			stmts: stmts
 			pos: pos
+			branch_pos: branch_pos
 			is_else: is_else
 			post_comments: post_comments
 			scope: branch_scope
@@ -403,7 +408,7 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 			len: branch_last_pos.pos - branch_first_pos.pos + branch_last_pos.len
 			col: branch_first_pos.col
 		}
-		post_comments := p.eat_comments({})
+		post_comments := p.eat_comments()
 		pos.update_last_line(p.prev_tok.line_nr)
 		if post_comments.len > 0 {
 			pos.last_line = post_comments.last().pos.last_line
