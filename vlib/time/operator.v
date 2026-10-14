@@ -1,21 +1,35 @@
 module time
 
 // operator `==` returns true if provided time is equal to time
-[inline]
+@[inline]
 pub fn (t1 Time) == (t2 Time) bool {
-	return t1.unix == t2.unix && t1.microsecond == t2.microsecond
+	t1_has_location := t1.has_location()
+	t2_has_location := t2.has_location()
+	if t1_has_location != t2_has_location {
+		return false
+	}
+	if t1_has_location {
+		return t1.nanosecond == t2.nanosecond && t1.unix() == t2.unix()
+	}
+	return t1.nanosecond == t2.nanosecond && t1.is_local == t2.is_local
+		&& t1.local_unix() == t2.local_unix()
 }
 
 // operator `<` returns true if provided time is less than time
-[inline]
+@[inline]
 pub fn (t1 Time) < (t2 Time) bool {
-	return t1.unix < t2.unix || (t1.unix == t2.unix && t1.microsecond < t2.microsecond)
+	t1u := t1.unix()
+	t2u := t2.unix()
+	return t1u < t2u || (t1u == t2u && t1.nanosecond < t2.nanosecond)
 }
 
 // Time subtract using operator overloading.
-[inline]
+@[inline]
 pub fn (lhs Time) - (rhs Time) Duration {
-	lhs_micro := lhs.unix * 1_000_000 + lhs.microsecond
-	rhs_micro := rhs.unix * 1_000_000 + rhs.microsecond
-	return (lhs_micro - rhs_micro) * microsecond
+	// lhs.unix * 1_000_000_000 + i64(lhs.nanosecond) will overflow i64, for years > 3000 .
+	// Doing the diff first, and *then* multiplying by `second`, is less likely to overflow,
+	// since lhs and rhs will be likely close to each other.
+	unixs := i64(lhs.unix() - rhs.unix()) * second
+	nanos := lhs.nanosecond - rhs.nanosecond
+	return unixs + nanos
 }

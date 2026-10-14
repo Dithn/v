@@ -9,21 +9,20 @@ enum Mode {
 	game
 }
 
-const (
-	player_one = 1 // Human control this racket
-	player_two = 0 // Take over this AI controller
-	white      = ui.Color{255, 255, 255}
-	orange     = ui.Color{255, 140, 0}
-)
+const player_one = 1 // Human control this racket
 
-[heap]
+const player_two = 0 // Take over this AI controller
+
+const white = ui.Color{255, 255, 255}
+
+@[heap]
 struct App {
 mut:
-	tui    &ui.Context = 0
+	tui    &ui.Context = unsafe { nil }
 	mode   Mode        = Mode.menu
 	width  int
 	height int
-	game   &Game = 0
+	game   &Game = unsafe { nil }
 	dt     f32
 	ticks  i64
 }
@@ -80,7 +79,7 @@ fn (mut a App) event(e &ui.Event) {
 			if a.mode != .game {
 				return
 			}
-			// TODO mouse movement for real Pong sharks
+			// TODO: mouse movement for real Pong sharks
 			// a.game.move_player(player_one, 0, -1)
 		}
 		.key_down {
@@ -167,18 +166,18 @@ fn (mut a App) draw_menu() {
 	y025 := int(f32(a.height) * 0.25)
 	y075 := int(f32(a.height) * 0.75)
 	cy := int(f32(a.height) * 0.5)
-	//
+
 	a.tui.set_color(white)
 	a.tui.bold()
 	a.tui.draw_text(cx - 2, y025, 'VONG')
 	a.tui.reset()
 	a.tui.draw_text(cx - 13, y025 + 1, '(A game of Pong written in V)')
-	//
+
 	a.tui.set_color(white)
 	a.tui.bold()
 	a.tui.draw_text(cx - 3, cy + 1, 'START')
 	a.tui.reset()
-	//
+
 	a.tui.draw_text(cx - 9, y075 + 1, 'Press SPACE to start')
 	a.tui.reset()
 	a.tui.draw_text(cx - 5, y075 + 3, 'ESC to Quit')
@@ -191,7 +190,7 @@ fn (mut a App) draw_game() {
 
 struct Player {
 mut:
-	game        &Game
+	game        &Game = unsafe { nil }
 	pos         Vec
 	racket_size int = 4
 	score       int
@@ -213,7 +212,7 @@ fn (mut p Player) update() {
 	// dt := p.game.app.dt
 	ball := unsafe { &p.game.ball }
 	// Evil AI that eventually will take over the world
-	p.pos.y = ball.pos.y - int(f32(p.racket_size) * 0.5)
+	p.pos.y = ball.pos.y - f32(p.racket_size) * 0.5
 }
 
 struct Vec {
@@ -239,10 +238,10 @@ fn (mut b Ball) update(dt f32) {
 	b.pos.y += b.vel.y * b.acc.y * dt
 }
 
-[heap]
+@[heap]
 struct Game {
 mut:
-	app     &App = 0
+	app     &App = unsafe { nil }
 	players []Player
 	ball    Ball
 }
@@ -279,7 +278,7 @@ fn (mut g Game) reset() {
 fn (mut g Game) new_round() {
 	mut i := 0
 	for mut p in g.players {
-		p.pos.x = if i == 0 { 3 } else { g.app.width - 2 }
+		p.pos.x = if i == 0 { f32(3) } else { f32(g.app.width - 2) }
 		p.pos.y = f32(g.app.height) * 0.5 - f32(p.racket_size) * 0.5
 		i++
 	}
@@ -295,10 +294,10 @@ fn (mut g Game) update() {
 		p.update()
 		// Keep rackets within the game area
 		if p.pos.y <= 0 {
-			p.pos.y = 1
+			p.pos.y = 1.0
 		}
 		if p.pos.y + p.racket_size >= g.app.height {
-			p.pos.y = g.app.height - p.racket_size - 1
+			p.pos.y = f32(g.app.height - p.racket_size - 1)
 		}
 		// Check ball collision
 		// Player left side
@@ -344,7 +343,7 @@ fn (mut g Game) quit() {
 }
 
 fn (mut g Game) draw_big_digit(px f32, py f32, digit int) {
-	// TODO use draw_line or draw_point to fix tearing with non-monospaced terminal fonts
+	// TODO: use draw_line or draw_point to fix tearing with non-monospaced terminal fonts
 	mut gfx := g.app.tui
 	x, y := int(px), int(py)
 	match digit {
@@ -449,7 +448,7 @@ fn (mut g Game) draw() {
 	}
 	// Ball
 	gfx.draw_point(int(g.ball.pos.x), int(g.ball.pos.y))
-	// gfx.draw_text(22,2,'$g.ball.pos')
+	// gfx.draw_text(22,2,'${g.ball.pos}')
 	gfx.reset_bg_color()
 }
 
@@ -457,43 +456,53 @@ fn (mut g Game) free() {
 	g.players.clear()
 }
 
-// TODO Remove these wrapper functions when we can assign methods as callbacks
-fn init(x voidptr) {
-	mut app := &App(x)
+// TODO: Remove these wrapper functions when we can assign methods as callbacks
+fn init(mut app App) {
 	app.init()
 }
 
-fn frame(x voidptr) {
-	mut app := &App(x)
+fn frame(mut app App) {
 	app.frame()
 }
 
-fn cleanup(x voidptr) {
-	mut app := &App(x)
-	app.free()
+fn cleanup(mut app App) {
+	unsafe {
+		app.free()
+	}
 }
 
 fn fail(error string) {
 	eprintln(error)
 }
 
-fn event(e &ui.Event, x voidptr) {
-	mut app := &App(x)
+fn event(e &ui.Event, mut app App) {
 	app.event(e)
 }
+
+type InitFn = fn (voidptr)
+
+type EventFn = fn (&ui.Event, voidptr)
+
+type FrameFn = fn (voidptr)
+
+type CleanupFn = fn (voidptr)
 
 fn main() {
 	mut app := &App{}
 	app.tui = ui.init(
-		user_data: app
-		init_fn: init
-		frame_fn: frame
-		cleanup_fn: cleanup
-		event_fn: event
-		fail_fn: fail
+		user_data:      app
+		// The tui callback slots are `voidptr`; these handlers (`init`, `frame`, `cleanup`,
+		// `event`) instead take the typed app pointer that `user_data` hands back. `&T` and
+		// `voidptr` share a representation, so reinterpreting each fn pointer across that
+		// parameter is ABI-safe; the casts only satisfy the static fn-type check.
+		init_fn:        unsafe { InitFn(init) }
+		frame_fn:       unsafe { FrameFn(frame) }
+		cleanup_fn:     unsafe { CleanupFn(cleanup) }
+		event_fn:       unsafe { EventFn(event) }
+		fail_fn:        fail
 		capture_events: true
-		hide_cursor: true
-		frame_rate: 60
+		hide_cursor:    true
+		frame_rate:     60
 	)
-	app.tui.run() ?
+	app.tui.run()!
 }

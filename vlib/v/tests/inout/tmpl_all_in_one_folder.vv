@@ -1,8 +1,0 @@
-fn abc() string {
-	content := 'some string'
-	return $tmpl('file.md')
-}
-
-fn main() {
-	print(abc())
-}

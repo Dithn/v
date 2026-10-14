@@ -1,37 +1,109 @@
 module embed_file
 
-import os
+// EmbedFileChunk is one piece of an embedded file. C only guarantees that an
+// implementation accepts 65535 bytes in a single object, so a payload past that
+// is emitted as several of these, and join_chunks puts them back together.
+//
+// A table of them ends with a zero length entry. If that entry still carries a
+// pointer, it is not the end but a link to the next table, which is how a table
+// stays an acceptable size itself.
+pub struct EmbedFileChunk {
+pub:
+	data &u8 = unsafe { nil }
+	len  int
+}
 
-// https://github.com/vlang/rfcs/blob/master/embedding_resources.md
+// join_chunks_buffer reserves the memory a joined payload lives in.
+//
+// Under `-prealloc` it deliberately does not come from the preallocator. The
+// buffer is filled at the top of `_vinit`, before `prealloc_vinit()` has
+// installed the first arena, so allocating it there would create an arena that
+// the installation then orphans, throwing off both the statistics and the
+// cleanup. It is also the wrong home for it either way: the buffer lives for the
+// whole program, while the preallocator is reset.
+@[unsafe]
+fn join_chunks_buffer(size int) &u8 {
+	$if prealloc {
+		unsafe {
+			buffer := join_chunks_raw_alloc(size)
+			if buffer == nil {
+				panic('EmbedFileData error: could not reserve ${size} bytes for a joined payload')
+			}
+			return buffer
+		}
+	} $else {
+		return unsafe { &u8(malloc(isize(size))) }
+	}
+}
+
+// join_chunks copies a payload that was embedded in pieces into one buffer, and
+// is called by generated code while the `EmbedFileData` is being built, not when
+// its bytes are first read. Materializing it there and not later is what keeps
+// `data()` free of the lazy mutation that two threads reading the same embedded
+// constant would race on.
+//
+// The buffer lives as long as the program, like the static bytes it replaces.
+@[markused]
+pub fn join_chunks(chunks &EmbedFileChunk, len int) &u8 {
+	unsafe {
+		buffer := join_chunks_buffer(if len > 0 { len } else { 1 })
+		mut offset := 0
+		mut chunk := chunks
+		for offset < len {
+			if chunk.len == 0 {
+				if chunk.data == nil {
+					break
+				}
+				// A link to the table that continues this one.
+				chunk = &EmbedFileChunk(chunk.data)
+				continue
+			}
+			mut n := chunk.len
+			if offset + n > len {
+				n = len - offset
+			}
+			vmemcpy(buffer + offset, chunk.data, isize(n))
+			offset += n
+			chunk++
+		}
+		return buffer
+	}
+}
+
 // EmbedFileData encapsulates functionality for the `$embed_file()` compile time call.
 pub struct EmbedFileData {
-	path  string
-	apath string
+	apath            string
+	compression_type string
 mut:
-	compressed        &byte
-	uncompressed      &byte
+	compressed        &u8 = unsafe { nil }
+	compressed_len    int
+	uncompressed      &u8 = unsafe { nil }
 	free_compressed   bool
 	free_uncompressed bool
 pub:
-	len int
+	// len is the size of what `data()` returns: the size the file had when the program
+	// was compiled, until a development build loads the file, and what it loaded after.
+	len  int
+	path string
 }
 
 pub fn (ed EmbedFileData) str() string {
-	return 'embed_file.EmbedFileData{ len: $ed.len, path: "$ed.path", path: "$ed.apath", uncompressed: ${ptr_str(ed.uncompressed)} }'
+	return 'embed_file.EmbedFileData{ len: ${ed.len}, path: "${ed.path}", apath: "${ed.apath}", uncompressed: ${ptr_str(ed.uncompressed)} }'
 }
 
-[unsafe]
+@[unsafe]
 pub fn (mut ed EmbedFileData) free() {
 	unsafe {
 		ed.path.free()
 		ed.apath.free()
+		ed.compression_type.free()
 		if ed.free_compressed {
 			free(ed.compressed)
-			ed.compressed = &byte(0)
+			ed.compressed = &u8(nil)
 		}
 		if ed.free_uncompressed {
 			free(ed.uncompressed)
-			ed.uncompressed = &byte(0)
+			ed.uncompressed = &u8(nil)
 		}
 	}
 }
@@ -39,40 +111,46 @@ pub fn (mut ed EmbedFileData) free() {
 pub fn (original &EmbedFileData) to_string() string {
 	unsafe {
 		mut ed := &EmbedFileData(original)
-		the_copy := &byte(memdup(ed.data(), ed.len))
+		// Loading the file sets `len`, so the bytes are taken before the length is read.
+		payload := ed.data()
+		the_copy := &u8(memdup(payload, ed.len))
 		return the_copy.vstring_with_len(ed.len)
 	}
 }
 
-pub fn (original &EmbedFileData) to_bytes() []byte {
+pub fn (original &EmbedFileData) to_bytes() []u8 {
 	unsafe {
 		mut ed := &EmbedFileData(original)
-		the_copy := memdup(ed.data(), ed.len)
+		// Loading the file sets `len`, so the bytes are taken before the length is read.
+		payload := ed.data()
+		the_copy := memdup(payload, ed.len)
 		return the_copy.vbytes(ed.len)
 	}
 }
 
-pub fn (mut ed EmbedFileData) data() &byte {
-	if !isnil(ed.uncompressed) {
-		return ed.uncompressed
+// data returns the embedded bytes, loading or decompressing them on the first call if needed.
+pub fn (original &EmbedFileData) data() &u8 {
+	if original.uncompressed != unsafe { nil } {
+		return original.uncompressed
+	}
+	// Reading bytes may populate the private cache, as in to_string and to_bytes.
+	mut ed := unsafe { &EmbedFileData(original) }
+	if ed.uncompressed == unsafe { nil } && ed.compressed != unsafe { nil } {
+		if ed.compression_type !in g_embed_file_decoders.decoders {
+			panic('EmbedFileData error: unknown compression of "${ed.path}": "${ed.compression_type}"')
+		}
+		// The core module must also compile before address-or lowering is bootstrapped.
+		decoder := unsafe { &g_embed_file_decoders.decoders[ed.compression_type] }
+		compressed := unsafe { ed.compressed.vbytes(ed.compressed_len) }
+		decompressed := decoder.decompress(compressed) or {
+			panic('EmbedFileData error: decompression of "${ed.path}" failed: ${err}')
+		}
+		unsafe {
+			ed.uncompressed = &u8(memdup(decompressed.data, ed.len))
+		}
 	} else {
-		if isnil(ed.uncompressed) && !isnil(ed.compressed) {
-			// TODO implement uncompression
-			// See also C Gen.gen_embedded_data() where the compression should occur.
-			ed.uncompressed = ed.compressed
-		} else {
-			mut path := os.resource_abs_path(ed.path)
-			if !os.is_file(path) {
-				path = ed.apath
-				if !os.is_file(path) {
-					panic('EmbedFileData error: files "$ed.path" and "$ed.apath" do not exist')
-				}
-			}
-			bytes := os.read_bytes(path) or {
-				panic('EmbedFileData error: "$path" could not be read: $err')
-			}
-			ed.uncompressed = bytes.data
-			ed.free_uncompressed = true
+		$if !freestanding {
+			reload_from_file_at_runtime(mut ed)
 		}
 	}
 	return ed.uncompressed
@@ -83,23 +161,25 @@ pub fn (mut ed EmbedFileData) data() &byte {
 // program that uses $embed_file('file.bin') in -prod mode.
 // V will generate a static index of all embedded files, and will call the
 // find_index_entry_by_path over the index and the relative paths of the embeds.
-// NB: these are public on purpose, to help -usecache.
+// Note: these are public on purpose, to help -usecache.
 pub struct EmbedFileIndexEntry {
 	id   int
 	path string
-	data &byte
+	algo string
+	data &u8 = unsafe { nil }
 }
 
 // find_index_entry_by_path is used internally by the V compiler:
-pub fn find_index_entry_by_path(start voidptr, path string) &EmbedFileIndexEntry {
-	mut x := &EmbedFileIndexEntry(start)
-	for !(x.path == path || isnil(x.data)) {
-		unsafe {
+@[markused]
+pub fn find_index_entry_by_path(start voidptr, path string, algo string) &EmbedFileIndexEntry {
+	unsafe {
+		mut x := &EmbedFileIndexEntry(start)
+		for x.id >= 0 && x.data != 0 && (x.algo != algo || x.path != path) {
 			x++
 		}
+		$if trace_embed_file ? {
+			eprintln('>> v.embed_file find_index_entry_by_path ${ptr_str(start)}, id: ${x.id}, path: "${path}", algo: "${algo}" => ${ptr_str(x)}')
+		}
+		return x
 	}
-	$if debug_embed_file_in_prod ? {
-		eprintln('>> v.embed_file find_index_entry_by_path ${ptr_str(start)}, path: "$path" => ${ptr_str(x)}')
-	}
-	return x
 }

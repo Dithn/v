@@ -1,0 +1,5 @@
+[vlib/v/slow_tests/inout/dump_match_expr.vv:3] match i {
+		0 { '0' }
+		1 { '1' }
+		else { '2' }
+	}: 1

@@ -1,0 +1,7 @@
+module json2
+
+import x.json2
+
+struct Any {}
+
+println(json2.Any{})

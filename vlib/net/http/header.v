@@ -1,9 +1,38 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module http
 
 import strings
+import arrays
+
+struct HeaderKV {
+	key   string
+	value string
+}
+
+// max_headers is the number of fields that a `Header` can hold.
+pub const max_headers = 50
+
+// Header represents the key-value pairs in an HTTP header.
+// It holds at most `max_headers` fields. A field that does not fit is never
+// stored: the writers that return a Result (`add_custom`, `set_custom`,
+// `add_custom_map`, `new_custom_header_from_map`) fail with a
+// `HeaderLimitError`, the others (`add`, `set`, `add_map`, `new_header`,
+// `new_header_from_map`, `join`) drop it.
+// A field value can not hold CR, LF or NUL (RFC 9110 section 5.5): the writers
+// that return a Result fail with a `HeaderValueError`, the others store a
+// space in place of each such byte.
+pub struct Header {
+pub mut:
+	// data map[string][]string
+	data [max_headers]HeaderKV
+mut:
+	cur_pos int
+	// map of lowercase header keys to their original keys
+	// in order of appearance
+	// keys map[string][]string
+}
 
 // CommonHeader is an enum of the most common HTTP headers
 pub enum CommonHeader {
@@ -28,6 +57,7 @@ pub enum CommonHeader {
 	allow
 	alt_svc
 	authorization
+	authority
 	cache_control
 	clear_site_data
 	connection
@@ -83,6 +113,7 @@ pub enum CommonHeader {
 	sec_fetch_site
 	sec_fetch_user
 	sec_websocket_accept
+	sec_websocket_key
 	server
 	server_timing
 	set_cookie
@@ -133,6 +164,7 @@ pub fn (h CommonHeader) str() string {
 		.allow { 'Allow' }
 		.alt_svc { 'Alt-Svc' }
 		.authorization { 'Authorization' }
+		.authority { 'Authority' }
 		.cache_control { 'Cache-Control' }
 		.clear_site_data { 'Clear-Site-Data' }
 		.connection { 'Connection' }
@@ -188,6 +220,7 @@ pub fn (h CommonHeader) str() string {
 		.sec_fetch_site { 'Sec-Fetch-Site' }
 		.sec_fetch_user { 'Sec-Fetch-User' }
 		.sec_websocket_accept { 'Sec-WebSocket-Accept' }
+		.sec_websocket_key { 'Sec-WebSocket-Key' }
 		.server { 'Server' }
 		.server_timing { 'Server-Timing' }
 		.set_cookie { 'Set-Cookie' }
@@ -293,6 +326,7 @@ const common_header_map = {
 	'sec-fetch-site':                      .sec_fetch_site
 	'sec-fetch-user':                      .sec_fetch_user
 	'sec-websocket-accept':                .sec_websocket_accept
+	'sec-websocket-key':                   .sec_websocket_key
 	'server':                              .server
 	'server-timing':                       .server_timing
 	'set-cookie':                          .set_cookie
@@ -320,32 +354,45 @@ const common_header_map = {
 	'x-xss-protection':                    .x_xss_protection
 }
 
-// Header represents the key-value pairs in an HTTP header
-[noinit]
-pub struct Header {
-mut:
-	data map[string][]string
-	// map of lowercase header keys to their original keys
-	// in order of appearance
-	keys map[string][]string
-}
-
 pub fn (mut h Header) free() {
 	unsafe {
-		h.data.free()
-		h.keys.free()
+		// h.data.free()
+		// h.keys.free()
 	}
 }
 
 pub struct HeaderConfig {
+pub:
 	key   CommonHeader
 	value string
 }
 
-// Create a new Header object
+@[inline]
+fn header_lower_ascii_byte(b u8) u8 {
+	if b >= `A` && b <= `Z` {
+		return b + 32
+	}
+	return b
+}
+
+fn header_key_eq(a string, b string) bool {
+	if a.len != b.len {
+		return false
+	}
+	for i in 0 .. a.len {
+		if header_lower_ascii_byte(a[i]) != header_lower_ascii_byte(b[i]) {
+			return false
+		}
+	}
+	return true
+}
+
+// new_header creates a new Header object.
+// Only the first `max_headers` entries of `kvs` are stored.
+// CR, LF and NUL in a value are replaced by a space, see `add`.
 pub fn new_header(kvs ...HeaderConfig) Header {
 	mut h := Header{
-		data: map[string][]string{}
+		// data: map[string][]string{}
 	}
 	for kv in kvs {
 		h.add(kv.key, kv.value)
@@ -354,6 +401,7 @@ pub fn new_header(kvs ...HeaderConfig) Header {
 }
 
 // new_header_from_map creates a Header from key value pairs
+// CR, LF and NUL in a value are replaced by a space, see `add`.
 pub fn new_header_from_map(kvs map[CommonHeader]string) Header {
 	mut h := new_header()
 	h.add_map(kvs)
@@ -361,28 +409,56 @@ pub fn new_header_from_map(kvs map[CommonHeader]string) Header {
 }
 
 // new_custom_header_from_map creates a Header from string key value pairs
-pub fn new_custom_header_from_map(kvs map[string]string) ?Header {
+// It returns a `HeaderValueError` for a value that contains CR, LF or NUL.
+pub fn new_custom_header_from_map(kvs map[string]string) !Header {
 	mut h := new_header()
-	h.add_custom_map(kvs) ?
+	h.add_custom_map(kvs)!
 	return h
 }
 
+// append stores one more field, and returns false, leaving the header
+// unchanged, when it already holds `max_headers` fields.
+fn (mut h Header) append(key string, value string) bool {
+	if h.cur_pos >= max_headers {
+		return false
+	}
+	h.data[h.cur_pos] = HeaderKV{key, value}
+	h.cur_pos++
+	return true
+}
+
 // add appends a value to the header key.
+// The value is dropped if the header already holds `max_headers` fields.
+// CR, LF and NUL can not be part of a field value (RFC 9110 section 5.5):
+// each of them is stored as a space.
 pub fn (mut h Header) add(key CommonHeader, value string) {
 	k := key.str()
-	h.data[k] << value
-	h.add_key(k)
+	// h.data[k] << value
+	h.append(k, header_value_without_crlf_nul(value))
+	// h.add_key(k)
 }
 
 // add_custom appends a value to a custom header key. This function will
-// return an error if the key contains invalid header characters.
-pub fn (mut h Header) add_custom(key string, value string) ? {
-	is_valid(key) ?
-	h.data[key] << value
-	h.add_key(key)
+// return an error if the key contains invalid header characters, and a
+// `HeaderLimitError` if the header already holds `max_headers` fields.
+// The key is rejected here because it is not checked again when the header is
+// sent: a name with a CR, LF, colon or space in it would otherwise be written
+// to the connection as it is, and could add or split header fields there.
+// To get the canonical form of a name that may be invalid, use
+// `canonical_header_key`, which never fails.
+// A value that contains CR, LF or NUL is rejected with a `HeaderValueError`.
+pub fn (mut h Header) add_custom(key string, value string) ! {
+	is_valid(key)!
+	check_header_value(key, value)!
+	// h.data[key] << value
+	if !h.append(key, value) {
+		return HeaderLimitError{}
+	}
+	// h.add_key(key)
 }
 
 // add_map appends the value for each header key.
+// CR, LF and NUL in a value are replaced by a space, see `add`.
 pub fn (mut h Header) add_map(kvs map[CommonHeader]string) {
 	for k, v in kvs {
 		h.add(k, v)
@@ -390,28 +466,71 @@ pub fn (mut h Header) add_map(kvs map[CommonHeader]string) {
 }
 
 // add_custom_map appends the value for each custom header key.
-pub fn (mut h Header) add_custom_map(kvs map[string]string) ? {
+// It returns a `HeaderValueError` for a value that contains CR, LF or NUL.
+pub fn (mut h Header) add_custom_map(kvs map[string]string) ! {
 	for k, v in kvs {
-		h.add_custom(k, v) ?
+		h.add_custom(k, v)!
 	}
 }
 
 // set sets the key-value pair. This function will clear any other values
 // that exist for the CommonHeader.
+// A key that is not present yet is dropped if the header already holds
+// `max_headers` fields.
+// CR, LF and NUL in the value are replaced by a space, see `add`.
 pub fn (mut h Header) set(key CommonHeader, value string) {
-	k := key.str()
-	h.data[k] = [value]
-	h.add_key(k)
+	key_str := key.str()
+	safe_value := header_value_without_crlf_nul(value)
+
+	// for i, kv in h.data {
+	for i := 0; i < h.cur_pos; i++ {
+		if h.data[i].key == key_str {
+			h.data[i] = HeaderKV{key_str, safe_value}
+			return
+		}
+	}
+	// Not updated, add a new one
+	h.append(key_str, safe_value)
+
+	// h.data[k] = [value]
+	// h.add_key(k)
 }
 
 // set_custom sets the key-value pair for a custom header key. This
 // function will clear any other values that exist for the header. This
 // function will return an error if the key contains invalid header
-// characters.
-pub fn (mut h Header) set_custom(key string, value string) ? {
-	is_valid(key) ?
-	h.data[key] = [value]
-	h.add_key(key)
+// characters, and a `HeaderLimitError` if the key is not present yet and
+// the header already holds `max_headers` fields.
+// As in `add_custom`, the key is rejected here because it is not checked
+// again when the header is sent.
+// A value that contains CR, LF or NUL is rejected with a `HeaderValueError`.
+pub fn (mut h Header) set_custom(key string, value string) ! {
+	is_valid(key)!
+	check_header_value(key, value)!
+	mut set := false
+	mut i := 0
+	for i < h.cur_pos {
+		if header_key_eq(h.data[i].key, key) {
+			if !set {
+				h.data[i] = HeaderKV{key, value}
+				set = true
+				i++
+			} else {
+				h.delete_at(i)
+			}
+		} else {
+			i++
+		}
+	}
+	if set {
+		return
+	}
+	// Not updated, add a new one
+	if !h.append(key, value) {
+		return HeaderLimitError{}
+	}
+	// h.data[key] = [value]
+	// h.add_key(key)
 }
 
 // delete deletes all values for a key.
@@ -419,60 +538,100 @@ pub fn (mut h Header) delete(key CommonHeader) {
 	h.delete_custom(key.str())
 }
 
+// remove_custom_all removes every header whose key matches `key`
+// case-insensitively, compacting the entries that follow so no empty
+// placeholder is left behind for a later lookup to find.
+//
+// This is deliberately stricter than `delete_custom`, which only matches the
+// exact casing and overwrites matches with an empty value in place -- a
+// tombstone that `get_custom` still returns, as an empty string, ahead of any
+// value added afterwards.
+fn (mut h Header) remove_custom_all(key string) {
+	mut kept := 0
+	for i := 0; i < h.cur_pos; i++ {
+		if header_key_eq(h.data[i].key, key) {
+			continue
+		}
+		if kept != i {
+			h.data[kept] = h.data[i]
+		}
+		kept++
+	}
+	for i := kept; i < h.cur_pos; i++ {
+		h.data[i] = HeaderKV{}
+	}
+	h.cur_pos = kept
+}
+
 // delete_custom deletes all values for a custom header key.
 pub fn (mut h Header) delete_custom(key string) {
-	h.data.delete(key)
+	mut i := 0
+	for i < h.cur_pos {
+		if header_key_eq(h.data[i].key, key) {
+			h.delete_at(i)
+		} else {
+			i++
+		}
+	}
+	// h.data.delete(key)
 
 	// remove key from keys metadata
+	/*
 	kl := key.to_lower()
 	if kl in h.keys {
 		h.keys[kl] = h.keys[kl].filter(it != key)
 	}
+	*/
 }
 
-pub struct HeaderCoerceConfig {
-	canonicalize bool
-}
-
-// coerce coerces data in the Header by joining keys that match
-// case-insensitively into one entry.
-pub fn (mut h Header) coerce(flags ...HeaderCoerceConfig) {
-	canon := flags.any(it.canonicalize)
-
-	for kl, data_keys in h.keys {
-		master_key := if canon { canonicalize(kl) } else { data_keys[0] }
-
-		// save master data
-		master_data := h.data[master_key]
-		h.data.delete(master_key)
-
-		for key in data_keys {
-			if key == master_key {
-				h.data[master_key] << master_data
-				continue
-			}
-			h.data[master_key] << h.data[key]
-			h.data.delete(key)
-		}
-		h.keys[kl] = [master_key]
+fn (mut h Header) delete_at(index int) {
+	for i := index; i < h.cur_pos - 1; i++ {
+		h.data[i] = h.data[i + 1]
 	}
+	h.cur_pos--
+	h.data[h.cur_pos] = HeaderKV{}
 }
 
 // contains returns whether the header key exists in the map.
 pub fn (h Header) contains(key CommonHeader) bool {
-	return h.contains_custom(key.str())
+	if h.cur_pos == 0 {
+		return false
+	}
+	key_str := key.str()
+	for i := 0; i < h.cur_pos; i++ {
+		if header_key_eq(h.data[i].key, key_str) {
+			return true
+		}
+	}
+	return false
+	// return h.contains_custom(key.str())
 }
 
+@[params]
 pub struct HeaderQueryConfig {
+pub:
 	exact bool
 }
 
 // contains_custom returns whether the custom header key exists in the map.
-pub fn (h Header) contains_custom(key string, flags ...HeaderQueryConfig) bool {
-	if flags.any(it.exact) {
-		return key in h.data
+pub fn (h Header) contains_custom(key string, flags HeaderQueryConfig) bool {
+	if flags.exact {
+		for i := 0; i < h.cur_pos; i++ {
+			kv := h.data[i]
+			if kv.key == key {
+				return true
+			}
+		}
+		return false
+	} else {
+		for i := 0; i < h.cur_pos; i++ {
+			kv := h.data[i]
+			if header_key_eq(kv.key, key) {
+				return true
+			}
+		}
+		return false
 	}
-	return key.to_lower() in h.keys
 }
 
 // get gets the first value for the CommonHeader, or none if the key
@@ -483,31 +642,37 @@ pub fn (h Header) get(key CommonHeader) ?string {
 
 // get_custom gets the first value for the custom header, or none if
 // the key does not exist.
-pub fn (h Header) get_custom(key string, flags ...HeaderQueryConfig) ?string {
-	mut data_key := key
-	if !flags.any(it.exact) {
-		// get the first key from key metadata
-		k := key.to_lower()
-		if h.keys[k].len == 0 {
-			return none
+pub fn (h Header) get_custom(key string, flags HeaderQueryConfig) ?string {
+	if flags.exact {
+		for i := 0; i < h.cur_pos; i++ {
+			// for kv in h.data {
+			kv := h.data[i]
+			// println('${kv.key} => ${kv.value}')
+			if kv.key == key {
+				return kv.value
+			}
 		}
-		data_key = h.keys[k][0]
+	} else {
+		// for kv in h.data {
+		for i := 0; i < h.cur_pos; i++ {
+			kv := h.data[i]
+			if header_key_eq(kv.key, key) {
+				return kv.value
+			}
+		}
 	}
-	if h.data[data_key].len == 0 {
-		return none
-	}
-	return h.data[data_key][0]
+	return none
 }
 
 // starting_with gets the first header starting with key, or none if
 // the key does not exist.
-pub fn (h Header) starting_with(key string) ?string {
-	for k, _ in h.data {
-		if k.starts_with(key) {
-			return k
+pub fn (h Header) starting_with(key string) !string {
+	for _, kv in h.data {
+		if kv.key.starts_with(key) {
+			return kv.key
 		}
 	}
-	return none
+	return error('none')
 }
 
 // values gets all values for the CommonHeader.
@@ -516,35 +681,85 @@ pub fn (h Header) values(key CommonHeader) []string {
 }
 
 // custom_values gets all values for the custom header.
-pub fn (h Header) custom_values(key string, flags ...HeaderQueryConfig) []string {
-	if flags.any(it.exact) {
-		return h.data[key]
+pub fn (h Header) custom_values(key string, flags HeaderQueryConfig) []string {
+	if h.cur_pos == 0 {
+		return []
 	}
-	// case insensitive lookup
-	mut values := []string{cap: 10}
-	for k in h.keys[key.to_lower()] {
-		values << h.data[k]
+	mut res := []string{cap: 2}
+	if flags.exact {
+		for i := 0; i < h.cur_pos; i++ {
+			kv := h.data[i]
+			if kv.key == key {
+				res << kv.value
+			}
+		}
+		return res
+	} else {
+		for i := 0; i < h.cur_pos; i++ {
+			kv := h.data[i]
+			if header_key_eq(kv.key, key) {
+				res << kv.value
+			}
+		}
+		return res
 	}
-	return values
 }
 
 // keys gets all header keys as strings
 pub fn (h Header) keys() []string {
-	return h.data.keys()
+	mut res := []string{cap: h.cur_pos}
+	for i := 0; i < h.cur_pos; i++ {
+		res << h.data[i].key
+	}
+	return arrays.uniq(res)
 }
 
+// unique_keys gets header names deduplicated case-insensitively, retaining the
+// first spelling. Use this when serializing HTTP fields.
+pub fn (h Header) unique_keys() []string {
+	mut res := []string{cap: h.cur_pos}
+	mut seen := map[string]bool{}
+	for i := 0; i < h.cur_pos; i++ {
+		lower := h.data[i].key.to_lower()
+		if lower in seen {
+			continue
+		}
+		seen[lower] = true
+		res << h.data[i].key
+	}
+	return res
+}
+
+@[params]
 pub struct HeaderRenderConfig {
-	version      Version
-	coerce       bool
+pub:
+	version Version
+	coerce  bool
+	// canonicalize writes each field name in its canonical spelling instead of
+	// the stored one. A name that has a `CommonHeader` is spelled like its
+	// `CommonHeader.str()`: `etag` -> `ETag`, `www-authenticate` -> `WWW-Authenticate`.
+	// Any other name gets its first letter and each letter after a `-` in upper
+	// case and the rest in lower case: `x-request-id` -> `X-Request-Id`.
+	// It has no effect with `version: .v2_0`, which writes lower case names.
 	canonicalize bool
 }
 
 // render renders the Header into a string for use in sending HTTP
 // requests. All header lines will end in `\r\n`
-[manualfree]
+@[manualfree]
 pub fn (h Header) render(flags HeaderRenderConfig) string {
 	// estimate ~48 bytes per header
 	mut sb := strings.new_builder(h.data.len * 48)
+	h.render_into_sb(mut sb, flags)
+	res := sb.str()
+	unsafe { sb.free() }
+	return res
+}
+
+// render_into_sb works like render, but uses a preallocated string builder instead.
+// This method should be used only for performance critical applications.
+pub fn (h Header) render_into_sb(mut sb strings.Builder, flags HeaderRenderConfig) {
+	/*
 	if flags.coerce {
 		for kl, data_keys in h.keys {
 			key := if flags.version == .v2_0 {
@@ -554,112 +769,252 @@ pub fn (h Header) render(flags HeaderRenderConfig) string {
 			} else {
 				data_keys[0]
 			}
-			sb.write_string(key)
-			sb.write_string(': ')
-			for i in 0 .. data_keys.len - 1 {
-				k := data_keys[i]
+			for k in data_keys {
 				for v in h.data[k] {
+					sb.write_string(key)
+					sb.write_string(': ')
 					sb.write_string(v)
-					sb.write_string(',')
+					sb.write_string('\r\n')
 				}
 			}
-			k := data_keys[data_keys.len - 1]
-			sb.write_string(h.data[k].join(','))
-			sb.write_string('\r\n')
 		}
 	} else {
-		for k, v in h.data {
-			key := if flags.version == .v2_0 {
-				k.to_lower()
-			} else if flags.canonicalize {
-				canonicalize(k.to_lower())
-			} else {
-				k
-			}
-			sb.write_string(key)
-			sb.write_string(': ')
-			sb.write_string(v.join(','))
-			sb.write_string('\r\n')
+	*/
+	// for _, kv in h.data {
+	for i := 0; i < h.cur_pos; i++ {
+		kv := h.data[i]
+		key := if flags.version == .v2_0 {
+			kv.key.to_lower()
+		} else if flags.canonicalize {
+			canonicalize(kv.key.to_lower())
+		} else {
+			kv.key
 		}
+		// XTODO  handle []string ? or doesn't matter?
+		// for v in vs {
+		sb.write_string(key)
+		sb.write_string(': ')
+		sb.write_string(kv.value)
+		sb.write_string('\r\n')
+		//}
 	}
-	res := sb.str()
-	unsafe { sb.free() }
-	return res
+	//}
 }
 
-// join combines two Header structs into a new Header struct
+// join combines two Header structs into a new Header struct.
+// The fields of `other` that do not fit in `max_headers` are dropped.
+// CR, LF and NUL in a value of `other` are replaced by a space, see `add`.
 pub fn (h Header) join(other Header) Header {
 	mut combined := Header{
-		data: h.data.clone()
-		keys: h.keys.clone()
+		data:    h.data // h.data.clone()
+		cur_pos: h.cur_pos
 	}
 	for k in other.keys() {
 		for v in other.custom_values(k, exact: true) {
-			combined.add_custom(k, v) or {
+			combined.add_custom(k, header_value_without_crlf_nul(v)) or {
+				if err is HeaderLimitError {
+					return combined
+				}
 				// panic because this should never fail
-				panic('unexpected error: $err')
+				panic('unexpected error: ' + err.str())
 			}
 		}
 	}
 	return combined
 }
 
-// canonicalize canonicalizes an HTTP header key
-// Common headers are determined by the common_header_map
-// Custom headers are capitalized on the first letter and any letter after a '-'
-// NOTE: Assumes sl is lowercase, since the caller usually already has the lowercase key
-fn canonicalize(sl string) string {
+// canonicalize returns the canonical spelling of the HTTP field name `name`.
+//
+// A name in `common_header_map` is spelled like its `CommonHeader`, so that the
+// result agrees with `CommonHeader.str()`. For the names in the IANA "HTTP Field
+// Name Registry" that is the registered spelling, e.g. `ETag`, `TE`, `Expect-CT`
+// and `WWW-Authenticate` (`DNT` is the spelling of the W3C document defining it).
+//
+// Any other name gets its first letter and each letter after a `-` in upper case
+// and the rest in lower case: `x-request-id` -> `X-Request-Id`. That is the rule
+// Go's `textproto.CanonicalMIMEHeaderKey` applies to every name, which is why Go
+// has `Etag`, `Te`, `Expect-Ct`, `Www-Authenticate` and `Dnt` for the names above.
+// Field names are case-insensitive (RFC 9110, section 5.1), so both spellings
+// name the same field.
+//
+// NOTE: Assumes name is lowercase, since the caller usually already has the lowercase key
+fn canonicalize(name string) string {
 	// check if we have a common header
-	if sl in http.common_header_map {
-		return http.common_header_map[sl].str()
+	if name in common_header_map {
+		return common_header_map[name].str()
 	}
-	return sl.split('-').map(it.capitalize()).join('-')
+	return name.split('-').map(it.capitalize()).join('-')
 }
 
 // Helper function to add a key to the keys map
+/*
 fn (mut h Header) add_key(key string) {
 	kl := key.to_lower()
 	if !h.keys[kl].contains(key) {
 		h.keys[kl] << key
 	}
 }
+*/
 
 // Custom error struct for invalid header tokens
 struct HeaderKeyError {
-	msg          string
+	Error
 	code         int
 	header       string
-	invalid_char byte
+	invalid_char u8
+}
+
+pub fn (err HeaderKeyError) msg() string {
+	return "Invalid header key: '${err.header}'"
+}
+
+pub fn (err HeaderKeyError) code() int {
+	return err.code
+}
+
+// HeaderLimitError is the error for a field that does not fit in a `Header`,
+// which holds at most `max_headers` fields. The request and response parsers
+// return it for a message that has more header fields than that.
+pub struct HeaderLimitError {
+	Error
+}
+
+// msg returns the description of the error.
+pub fn (err HeaderLimitError) msg() string {
+	return 'too many header fields: http.Header holds at most ${max_headers}'
+}
+
+// HeaderValueError is the error for a field value that contains CR, LF or NUL.
+// RFC 9110 section 5.5 forbids these bytes in a field value: written as they
+// are, they would end the field line. The request and response parsers return
+// it for a received field whose value has a bare CR or a NUL.
+pub struct HeaderValueError {
+	Error
+pub:
+	header       string // the name of the field
+	invalid_char u8     // the first forbidden byte of its value
+}
+
+// msg returns the description of the error. It names the field and the byte,
+// and leaves the value out, which can be a credential.
+pub fn (err HeaderValueError) msg() string {
+	name := match err.invalid_char {
+		`\r` { 'CR' }
+		`\n` { 'LF' }
+		else { 'NUL' }
+	}
+	return "Invalid header value for '${err.header}': it contains ${name}"
+}
+
+// header_value_word returns the 8 bytes of `value` that start at `i` as one
+// integer. An optimizing C compiler turns it into a single load.
+@[direct_array_access; inline]
+fn header_value_word(value string, i int) u64 {
+	lo := u32(value[i]) | u32(value[i + 1]) << 8 | u32(value[i + 2]) << 16 | u32(value[i + 3]) << 24
+	hi := u32(value[i + 4]) | u32(value[i + 5]) << 8 | u32(value[i + 6]) << 16 | u32(value[i + 7]) << 24
+	return u64(hi) << 32 | lo
+}
+
+// word_has_byte_below_0e reports whether one of the 8 bytes of `w` is below
+// 0x0e, the range that holds NUL, LF and CR. The subtraction intentionally wraps.
+@[ignore_overflow; inline]
+fn word_has_byte_below_0e(w u64) bool {
+	return (w - 0x0e0e0e0e0e0e0e0e) & ~w & 0x8080808080808080 != 0
+}
+
+// header_value_crlf_nul_index returns the index of the first CR, LF or NUL in
+// `value`, or -1 when it has none.
+@[direct_array_access]
+fn header_value_crlf_nul_index(value string) int {
+	if value.len >= 8 {
+		// The usual value has no byte below 0x0e: rule it out 8 bytes at a
+		// time. The last word overlaps the one before it.
+		mut i := 0
+		for i + 8 < value.len && !word_has_byte_below_0e(header_value_word(value, i)) {
+			i += 8
+		}
+		if i + 8 >= value.len && !word_has_byte_below_0e(header_value_word(value, value.len - 8)) {
+			return -1
+		}
+	}
+	for i in 0 .. value.len {
+		c := value[i]
+		if c == `\r` || c == `\n` || c == 0 {
+			return i
+		}
+	}
+	return -1
+}
+
+// check_header_value returns a `HeaderValueError` if `value` contains CR, LF or NUL.
+fn check_header_value(key string, value string) ! {
+	i := header_value_crlf_nul_index(value)
+	if i >= 0 {
+		return HeaderValueError{
+			header:       key
+			invalid_char: value[i]
+		}
+	}
+}
+
+// header_value_without_crlf_nul returns `value` with each CR, LF and NUL
+// replaced by a space, which is what RFC 9110 section 5.5 asks of a recipient
+// that does not reject the message. It returns `value` itself, without a copy,
+// when it has none of them.
+fn header_value_without_crlf_nul(value string) string {
+	first := header_value_crlf_nul_index(value)
+	if first < 0 {
+		return value
+	}
+	mut b := value.bytes()
+	for i in first .. b.len {
+		if b[i] == `\r` || b[i] == `\n` || b[i] == 0 {
+			b[i] = ` `
+		}
+	}
+	return b.bytestr()
 }
 
 // is_valid checks if the header token contains all valid bytes
-fn is_valid(header string) ? {
+fn is_valid(header string) ! {
 	for _, c in header {
 		if int(c) >= 128 || !is_token(c) {
-			return IError(HeaderKeyError{
-				msg: "Invalid header key: '$header'"
-				code: 1
-				header: header
+			return HeaderKeyError{
+				code:         1
+				header:       header
 				invalid_char: c
-			})
+			}
 		}
 	}
 	if header.len == 0 {
-		return IError(HeaderKeyError{
-			msg: "Invalid header key: '$header'"
-			code: 2
-			header: header
+		return HeaderKeyError{
+			code:         2
+			header:       header
 			invalid_char: 0
-		})
+		}
 	}
 }
 
 // is_token checks if the byte is valid for a header token
-fn is_token(b byte) bool {
+fn is_token(b u8) bool {
 	return match b {
 		33, 35...39, 42, 43, 45, 46, 48...57, 65...90, 94...122, 124, 126 { true }
 		else { false }
 	}
+}
+
+// canonical_header_key returns the canonical form of the header name `key`,
+// in the spelling that `Header.render(canonicalize: true)` writes. The name
+// can be in any case. It never fails: like Go's `http.CanonicalHeaderKey`, it
+// returns a `key` that is not a valid header name unchanged. That is an empty
+// name, or one with a byte that is not an RFC 9110 token character, such as a
+// space, `=`, a control character or a non-ASCII byte.
+// Such a name is still rejected by `Header.add_custom` and `Header.set_custom`.
+// Example: assert http.canonical_header_key('accept-ENCODING') == 'Accept-Encoding'
+// Example: assert http.canonical_header_key('x custom') == 'x custom'
+pub fn canonical_header_key(key string) string {
+	is_valid(key) or { return key }
+	return canonicalize(key.to_lower())
 }
 
 // str returns the headers string as seen in HTTP/1.1 requests.
@@ -669,7 +1024,7 @@ pub fn (h Header) str() string {
 }
 
 // parse_headers parses a newline delimited string into a Header struct
-fn parse_headers(s string) ?Header {
+fn parse_headers(s string) !Header {
 	mut h := new_header()
 	mut last_key := ''
 	mut last_value := ''
@@ -682,19 +1037,24 @@ fn parse_headers(s string) ?Header {
 			last_value += ' ${line.trim(' \t')}'
 			continue
 		} else if last_key != '' {
-			h.add_custom(last_key, last_value) ?
+			h.add_custom(last_key, last_value)!
 		}
-		last_key, last_value = parse_header(line) ?
+		last_key, last_value = parse_header(line)!
 	}
-	h.add_custom(last_key, last_value) ?
+	h.add_custom(last_key, last_value)!
 	return h
 }
 
-fn parse_header(s string) ?(string, string) {
+fn parse_header(s string) !(string, string) {
 	if !s.contains(':') {
 		return error('missing colon in header')
 	}
 	words := s.split_nth(':', 2)
 	// TODO: parse quoted text according to the RFC
 	return words[0], words[1].trim(' \t')
+}
+
+fn parse_header_fast(s string) !int {
+	pos := s.index(':') or { return error('missing colon in header') }
+	return pos
 }

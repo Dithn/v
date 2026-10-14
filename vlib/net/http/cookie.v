@@ -5,6 +5,7 @@ module http
 
 import time
 import strings
+import strconv
 
 pub struct Cookie {
 pub mut:
@@ -32,34 +33,20 @@ pub mut:
 //
 // See https://tools.ietf.org/html/draft-ietf-httpbis-cookie-same-site-00 for details.
 pub enum SameSite {
+	same_site_not_set
 	same_site_default_mode = 1
 	same_site_lax_mode
 	same_site_strict_mode
 	same_site_none_mode
 }
 
-// Parses all "Set-Cookie" values from the header `h` and
-// returns the successfully parsed Cookies.
-pub fn read_set_cookies(h map[string][]string) []&Cookie {
-	cookies_s := h['Set-Cookie']
-	cookie_count := cookies_s.len
-	if cookie_count == 0 {
-		return []
-	}
-	mut cookies := []&Cookie{}
-	for _, line in cookies_s {
-		c := parse_cookie(line) or { continue }
-		cookies << &c
-	}
-	return cookies
-}
-
 // Parses all "Cookie" values from the header `h` and
 // returns the successfully parsed Cookies.
 //
 // if `filter` isn't empty, only cookies of that name are returned
-pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
-	lines := h['Cookie']
+pub fn read_cookies(h Header, filter string) []&Cookie {
+	// lines := h['Cookie']
+	lines := h.values(.cookie) // or {
 	if lines.len == 0 {
 		return []
 	}
@@ -68,10 +55,13 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 		mut line := line_.trim_space()
 		mut part := ''
 		for line.len > 0 {
-			if line.index_any(';') > 0 {
-				line_parts := line.split(';')
+			mut semicolon_position :=
+				line.index_any(';') // Store the position of the next semicolon
+			if semicolon_position > 0 { // So, there is a semicolon, let's parse until that position
+				line_parts :=
+					line[..semicolon_position].split(';') // split the line only until that semicolon
+				line = line[(semicolon_position + 1)..] // and then skip everything before the semicolon
 				part = line_parts[0]
-				line = line_parts[1]
 			} else {
 				part = line
 				line = ''
@@ -80,14 +70,8 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 			if part.len == 0 {
 				continue
 			}
-			mut name := part
-			mut val := ''
-			if part.contains('=') {
-				val_parts := part.split('=')
-				name = val_parts[0]
-				val = val_parts[1]
-			}
-			if !is_cookie_name_valid(name) {
+			mut name, mut val := part.split_once('=') or { part, '' }
+			if !is_cookie_name_readable(name) {
 				continue
 			}
 			if filter != '' && filter != name {
@@ -95,7 +79,7 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 			}
 			val = parse_cookie_value(val, true) or { continue }
 			cookies << &Cookie{
-				name: name
+				name:  name
 				value: val
 			}
 		}
@@ -103,11 +87,12 @@ pub fn read_cookies(h map[string][]string, filter string) []&Cookie {
 	return cookies
 }
 
-// Returns the serialization of the cookie for use in a Cookie header
+// str returns the serialization of the cookie for use in a Cookie header
 // (if only Name and Value are set) or a Set-Cookie response
 // header (if other fields are set).
 //
-// If c.name is invalid, the empty string is returned.
+// If c.name is not an RFC 9110 token (letters, digits and any of !#$%&'*+-.^_`|~),
+// the empty string is returned.
 pub fn (c &Cookie) str() string {
 	if !is_cookie_name_valid(c.name) {
 		return ''
@@ -121,7 +106,7 @@ pub fn (c &Cookie) str() string {
 	b.write_string('=')
 	b.write_string(sanitize_cookie_value(c.value))
 	if c.path.len > 0 {
-		b.write_string('; path=')
+		b.write_string('; Path=')
 		b.write_string(sanitize_cookie_path(c.path))
 	}
 	if c.domain.len > 0 {
@@ -134,19 +119,18 @@ pub fn (c &Cookie) str() string {
 			if d[0] == `.` {
 				d = d.substr(1, d.len)
 			}
-			b.write_string('; domain=')
+			b.write_string('; Domain=')
 			b.write_string(d)
 		} else {
 			// TODO: Log invalid cookie domain warning
 		}
 	}
 	if c.expires.year > 1600 {
-		e := c.expires
-		time_str := '$e.weekday_str(), $e.day.str() $e.smonth() $e.year $e.hhmmss() GMT'
-		b.write_string('; expires=')
+		time_str := c.expires.http_header_string()
+		b.write_string('; Expires=')
 		b.write_string(time_str)
 	}
-	// TODO: Fix this. Techically a max age of 0 or less should be 0
+	// TODO: Fix this. Technically a max age of 0 or less should be 0
 	// We need a way to not have a max age.
 	if c.max_age > 0 {
 		b.write_string('; Max-Age=')
@@ -161,8 +145,9 @@ pub fn (c &Cookie) str() string {
 		b.write_string('; Secure')
 	}
 	match c.same_site {
+		.same_site_not_set {}
 		.same_site_default_mode {
-			b.write_string('; SameSite')
+			// Skip, the default mode is obtained by not emitting the attribute.
 		}
 		.same_site_none_mode {
 			b.write_string('; SameSite=None')
@@ -174,10 +159,11 @@ pub fn (c &Cookie) str() string {
 			b.write_string('; SameSite=Strict')
 		}
 	}
+
 	return b.str()
 }
 
-fn sanitize(valid fn (byte) bool, v string) string {
+fn sanitize(valid fn (u8) bool, v string) string {
 	mut ok := true
 	for i in 0 .. v.len {
 		if valid(v[i]) {
@@ -197,6 +183,8 @@ fn sanitize_cookie_name(name string) string {
 	return name.replace_each(['\n', '-', '\r', '-'])
 }
 
+// sanitize_cookie_value removes invalid cookie bytes and quotes the sanitized value
+// when it contains a space or comma.
 // https://tools.ietf.org/html/rfc6265#section-4.1.1
 // cookie-value      = *cookie-octet / ( DQUOTE *cookie-octet DQUOTE )
 // cookie-octet      = %x21 / %x23-2B / %x2D-3A / %x3C-5B / %x5D-7E
@@ -204,44 +192,45 @@ fn sanitize_cookie_name(name string) string {
 //           ; whitespace DQUOTE, comma, semicolon,
 //           ; and backslash
 // We loosen this as spaces and commas are common in cookie values
-// but we produce a quoted cookie-value in when value starts or ends
-// with a comma or space.
+// but we produce a quoted cookie-value when value contains
+// a comma or space.
 pub fn sanitize_cookie_value(v string) string {
 	val := sanitize(valid_cookie_value_byte, v)
-	if v.len == 0 {
-		return v
+	// Quote a value that contains spaces or commas.
+	if val.contains_any(' ,') {
+		return '"${val}"'
 	}
-	// Check for the existence of a space or comma
-	if val.starts_with(' ') || val.ends_with(' ') || val.starts_with(',') || val.ends_with(',') {
-		return '"$v"'
-	}
-	return v
+	return val
 }
 
 fn sanitize_cookie_path(v string) string {
 	return sanitize(valid_cookie_path_byte, v)
 }
 
-fn valid_cookie_value_byte(b byte) bool {
+fn valid_cookie_value_byte(b u8) bool {
 	return 0x20 <= b && b < 0x7f && b != `"` && b != `;` && b != `\\`
 }
 
-fn valid_cookie_path_byte(b byte) bool {
+fn valid_cookie_path_byte(b u8) bool {
 	return 0x20 <= b && b < 0x7f && b != `!`
 }
 
 fn valid_cookie_domain(v string) bool {
-	if is_cookie_domain_name(v) {
-		return true
+	return is_cookie_domain_name(v) || is_ipv4_literal(v)
+}
+
+fn is_ipv4_literal(s string) bool {
+	parts := s.split('.')
+	if parts.len != 4 {
+		return false
 	}
-	// TODO
-	// valid_ip := net.parse_ip(v) or {
-	// 	false
-	// }
-	// if valid_ip {
-	// 	return true
-	// }
-	return false
+	for part in parts {
+		if part.len == 0 || part.len > 3 || !part.contains_only('0123456789')
+			|| part.int() > 255 {
+			return false
+		}
+	}
+	return true
 }
 
 pub fn is_cookie_domain_name(_s string) bool {
@@ -260,7 +249,7 @@ pub fn is_cookie_domain_name(_s string) bool {
 	mut part_len := 0
 	for i, _ in s {
 		c := s[i]
-		if (`a` <= c && c <= `z`) || (`A` <= c && c <= `Z`) {
+		if c.is_letter() {
 			// No '_' allowed here (in contrast to package net).
 			ok = true
 			part_len++
@@ -293,7 +282,7 @@ pub fn is_cookie_domain_name(_s string) bool {
 	return ok
 }
 
-fn parse_cookie_value(_raw string, allow_double_quote bool) ?string {
+fn parse_cookie_value(_raw string, allow_double_quote bool) !string {
 	mut raw := _raw
 	// Strip the quotes, if present
 	if allow_double_quote && raw.len > 1 && raw[0] == `"` && raw[raw.len - 1] == `"` {
@@ -307,7 +296,26 @@ fn parse_cookie_value(_raw string, allow_double_quote bool) ?string {
 	return raw
 }
 
+// is_cookie_name_valid reports whether `name` is an RFC 9110 token, which is what
+// RFC 6265 requires of a cookie-name. `Cookie.str()` writes no other name: a
+// separator such as `;`, `,` or `=` in it would be read back as a different cookie.
 fn is_cookie_name_valid(name string) bool {
+	if name == '' {
+		return false
+	}
+	for b in name {
+		if !is_token(b) {
+			return false
+		}
+	}
+	return true
+}
+
+// is_cookie_name_readable is the looser rule for a name received in a `Cookie` or
+// `Set-Cookie` header: any visible ASCII byte. The parsers split on `;` and `=`, so
+// neither can be part of a name, and names that peers do send, such as `foo[bar]`
+// or `a:b`, are kept.
+fn is_cookie_name_readable(name string) bool {
 	if name == '' {
 		return false
 	}
@@ -319,38 +327,35 @@ fn is_cookie_name_valid(name string) bool {
 	return true
 }
 
-fn parse_cookie(line string) ?Cookie {
+fn parse_cookie(line string) !Cookie {
 	mut parts := line.trim_space().split(';')
 	if parts.len == 1 && parts[0] == '' {
 		return error('malformed cookie')
 	}
 	parts[0] = parts[0].trim_space()
-	keyval := parts[0].split('=')
-	if keyval.len != 2 {
-		return error('malformed cookie')
-	}
-	name := keyval[0]
-	raw_value := keyval[1]
-	if !is_cookie_name_valid(name) {
+	index := parts[0].index('=') or { return error('malformed cookie') }
+	name := parts[0][..index]
+	raw_value := parts[0][index + 1..]
+	if !is_cookie_name_readable(name) {
 		return error('malformed cookie')
 	}
 	value := parse_cookie_value(raw_value, true) or { return error('malformed cookie') }
 	mut c := Cookie{
-		name: name
+		name:  name
 		value: value
-		raw: line
+		raw:   line
 	}
-	for i, _ in parts {
+	// parts[0] is the `name=value` pair read above; the attributes start after it.
+	for i in 1 .. parts.len {
 		parts[i] = parts[i].trim_space()
 		if parts[i].len == 0 {
 			continue
 		}
 		mut attr := parts[i]
 		mut raw_val := ''
-		if attr.contains('=') {
-			pieces := attr.split('=')
-			attr = pieces[0]
-			raw_val = pieces[1]
+		if ind := parts[i].index('=') {
+			attr = parts[i][..ind]
+			raw_val = parts[i][ind + 1..]
 		}
 		lower_attr := attr.to_lower()
 		val := parse_cookie_value(raw_val, false) or {
@@ -380,26 +385,23 @@ fn parse_cookie(line string) ?Cookie {
 				continue
 			}
 			'max-age' {
-				mut secs := val.int()
-				if secs != 0 && val[0] != `0` {
-					break
+				if secs := parse_cookie_max_age(val) {
+					c.max_age = if secs > 0 { secs } else { -1 }
+					continue
 				}
-				if secs <= 0 {
-					secs = -1
-				}
-				c.max_age = secs
-				continue
+				c.unparsed << parts[i]
 			}
-			// TODO: Fix this once time works better
-			// 'expires' {
-			// 	c.raw_expires = val
-			// 	mut exptime := time.parse_iso(val)
-			// 	if exptime.year == 0 {
-			// 		exptime = time.parse_iso('Mon, 02-Jan-2006 15:04:05 MST')
-			// 	}
-			// 	c.expires = exptime
-			// 	continue
-			// }
+			'expires' {
+				c.raw_expires = val
+				if exptime := time.parse_http_header_string(val) {
+					// RFC 6265 requires cookie expiry years to be at least 1601.
+					if exptime.year >= 1601 {
+						c.expires = exptime
+						continue
+					}
+				}
+				c.unparsed << parts[i]
+			}
 			'path' {
 				c.path = val
 				continue
@@ -410,4 +412,21 @@ fn parse_cookie(line string) ?Cookie {
 		}
 	}
 	return c
+}
+
+// parse_cookie_max_age returns the number of seconds in the value of a `Max-Age`
+// attribute. The value has to be a decimal integer that fits in an int: an optional
+// sign and digits, nothing else, and no leading zero unless the number is zero.
+// `string.int()` is too lenient for that: it reads `12abc` as 12, `0x10` as 16
+// and `abc` or an empty value as 0.
+fn parse_cookie_max_age(val string) ?int {
+	digits := if val.len > 0 && (val[0] == `-` || val[0] == `+`) { val[1..] } else { val }
+	if !all_digits(digits) {
+		return none
+	}
+	secs := strconv.atoi64(val) or { return none }
+	if secs < min_int || secs > max_int || (secs != 0 && val[0] == `0`) {
+		return none
+	}
+	return int(secs)
 }

@@ -1,0 +1,5 @@
+import json2 as strings
+import strings
+
+out := strings.repeat(`a`, 3)
+println(out)

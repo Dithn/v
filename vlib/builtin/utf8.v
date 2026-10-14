@@ -1,188 +1,197 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module builtin
 
-pub fn utf8_char_len(b byte) int {
-	return ((0xe5000000 >> ((b >> 3) & 0x1e)) & 3) + 1
+const utf8_replacement_rune = rune(0xfffd)
+
+// utf8_char_len returns the length in bytes of a UTF-8 encoded codepoint that starts with the byte `b`.
+pub fn utf8_char_len(b u8) int {
+	return int(((u32(0xe5000000) >> ((b >> 3) & 0x1e)) & 3) + 1)
 }
 
-// Convert utf32 to utf8
-// utf32 == Codepoint
+// utf32_to_str returns the UTF-8 encoding of the code point `code` as a new string.
+// A value that is not a Unicode scalar value (a surrogate half in 0xD800..0xDFFF,
+// or anything above 0x10FFFF) is encoded as U+FFFD, the replacement character.
 pub fn utf32_to_str(code u32) string {
 	unsafe {
 		mut buffer := malloc_noscan(5)
-		return utf32_to_str_no_malloc(code, buffer)
+		return utf32_to_str_no_malloc(code, mut buffer)
 	}
 }
 
-[unsafe]
-pub fn utf32_to_str_no_malloc(code u32, buf voidptr) string {
-	icode := int(code) // Prevents doing casts everywhere
-	mut res := ''
+// utf32_to_str_no_malloc writes the UTF-8 encoding of the code point `code` to `buf`,
+// followed by a 0 byte, and returns a string that uses `buf` as its storage.
+// `buf` must have room for at least 5 bytes.
+// See `utf32_decode_to_buffer` for what is written for an invalid `code`.
+@[manualfree; unsafe]
+pub fn utf32_to_str_no_malloc(code u32, mut buf &u8) string {
 	unsafe {
-		mut buffer := &byte(buf)
-		if icode <= 127 {
+		len := utf32_decode_to_buffer(code, mut buf)
+		buf[len] = 0
+		return tos(buf, len)
+	}
+}
+
+// utf32_decode_to_buffer writes the UTF-8 encoding of the code point `code` to `buf`,
+// which must have room for at least 4 bytes. It returns the number of bytes written,
+// which is always between 1 and 4.
+// A value that is not a Unicode scalar value (a surrogate half in 0xD800..0xDFFF,
+// or anything above 0x10FFFF) is encoded as U+FFFD, the replacement character.
+@[manualfree; unsafe]
+pub fn utf32_decode_to_buffer(code u32, mut buf &u8) int {
+	unsafe {
+		icode := int(code) // Prevents doing casts everywhere
+		mut buffer := &u8(buf)
+		// The ranges are checked on the unsigned `code`: where `int` has 32 bits,
+		// `icode` is negative for a `code` above 0x7FFFFFFF.
+		if code <= 127 {
 			// 0x7F
-			buffer[0] = byte(icode)
-			buffer[1] = 0
-			res = tos(buffer, 1)
-		} else if icode <= 2047 {
+			buffer[0] = u8(icode)
+			return 1
+		} else if code <= 2047 {
 			// 0x7FF
-			buffer[0] = 192 | byte(icode >> 6) // 0xC0 - 110xxxxx
-			buffer[1] = 128 | byte(icode & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[2] = 0
-			res = tos(buffer, 2)
-		} else if icode <= 65535 {
-			// 0xFFFF
-			buffer[0] = 224 | byte(icode >> 12) // 0xE0 - 1110xxxx
-			buffer[1] = 128 | (byte(icode >> 6) & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[2] = 128 | byte(icode & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[3] = 0
-			res = tos(buffer, 3)
+			buffer[0] = 192 | u8(icode >> 6) // 0xC0 - 110xxxxx
+			buffer[1] = 128 | u8(icode & 63) // 0x80 - 0x3F - 10xxxxxx
+			return 2
+		} else if code <= 65535 && (code < 0xd800 || code > 0xdfff) {
+			// 0xFFFF, without the surrogate halves
+			buffer[0] = 224 | u8(icode >> 12) // 0xE0 - 1110xxxx
+			buffer[1] = 128 | (u8(icode >> 6) & 63) // 0x80 - 0x3F - 10xxxxxx
+			buffer[2] = 128 | u8(icode & 63) // 0x80 - 0x3F - 10xxxxxx
+			return 3
 		}
 		// 0x10FFFF
-		else if icode <= 1114111 {
-			buffer[0] = 240 | byte(icode >> 18) // 0xF0 - 11110xxx
-			buffer[1] = 128 | (byte(icode >> 12) & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[2] = 128 | (byte(icode >> 6) & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[3] = 128 | byte(icode & 63) // 0x80 - 0x3F - 10xxxxxx
-			buffer[4] = 0
-			res = tos(buffer, 4)
+		else if code > 65535 && code <= 1114111 {
+			buffer[0] = 240 | u8(icode >> 18) // 0xF0 - 11110xxx
+			buffer[1] = 128 | (u8(icode >> 12) & 63) // 0x80 - 0x3F - 10xxxxxx
+			buffer[2] = 128 | (u8(icode >> 6) & 63) // 0x80 - 0x3F - 10xxxxxx
+			buffer[3] = 128 | u8(icode & 63) // 0x80 - 0x3F - 10xxxxxx
+			return 4
 		}
+		// Not a Unicode scalar value: write U+FFFD, like the decoder does for invalid input.
+		buffer[0] = 0xef
+		buffer[1] = 0xbf
+		buffer[2] = 0xbd
 	}
-	res.is_lit = 1 // let autofree know this string doesn't have to be freed
-	return res
+	return 3
 }
 
 // Convert utf8 to utf32
+// the original implementation did not check for
+// valid utf8 in the string, and could result in
+// values greater than the utf32 spec
+// it has been replaced by `utf8_to_utf32` which
+// has an option return type.
+//
+// this function is left for backward compatibility
+// it is used in vlib/builtin/string.v,
+// and also by the V compiler's C backend
 pub fn (_rune string) utf32_code() int {
-	if _rune.len == 0 {
+	if _rune.len > 4 {
 		return 0
 	}
-	// save ASC symbol as is
-	if _rune.len == 1 {
-		return int(_rune[0])
-	}
-	mut b := byte(int(_rune[0]))
-	// TODO should be
-	// res := int( rune[0] << rune.len)
-	b = b << _rune.len
-	mut res := int(b)
-	mut shift := 6 - _rune.len
-	for i := 1; i < _rune.len; i++ {
-		c := int(_rune[i])
-		res = res << shift
-		res |= c & 63 // 0x3f
-		shift = 6
-	}
-	return res
+	return int(impl_utf8_to_utf32(_rune.str, _rune.len))
 }
 
-// Calculate length to read from the first byte
-fn utf8_len(c byte) int {
-	mut b := 0
-	mut x := c
-	if (x & 240) != 0 {
-		// 0xF0
-		x >>= 4
-	} else {
-		b += 4
+// convert array of utf8 bytes to single utf32 value
+// will error if more than 4 bytes are submitted
+pub fn (_bytes []u8) utf8_to_utf32() !rune {
+	if _bytes.len > 4 {
+		return error('attempted to decode too many bytes, utf-8 is limited to four bytes maximum')
 	}
-	if (x & 12) != 0 {
-		// 0x0C
-		x >>= 2
-	} else {
-		b += 2
-	}
-	if (x & 2) == 0 {
-		// 0x02
-		b++
-	}
-	return b
+	return impl_utf8_to_utf32(_bytes.data, _bytes.len)
 }
 
-// Calculate string length for in number of codepoints
-pub fn utf8_str_len(s string) int {
-	mut l := 0
-	mut i := 0
-	for i < s.len {
-		l++
-		i += ((0xe5000000 >> ((unsafe { s.str[i] } >> 3) & 0x1e)) & 3) + 1
+@[inline]
+fn utf8_is_continuation(b u8) bool {
+	return (b & 0xc0) == 0x80
+}
+
+@[direct_array_access]
+fn utf8_decode_rune(_bytes &u8, available_len int) (rune, int) {
+	if available_len <= 0 {
+		return 0, 0
 	}
-	return l
+	b0 := unsafe { _bytes[0] }
+	if b0 < 0x80 {
+		return rune(b0), 1
+	}
+	if b0 < 0xc2 {
+		return utf8_replacement_rune, 1
+	}
+	char_len := if b0 < 0xe0 {
+		2
+	} else if b0 < 0xf0 {
+		3
+	} else if b0 < 0xf5 {
+		4
+	} else {
+		return utf8_replacement_rune, 1
+	}
+	if available_len < char_len {
+		return utf8_replacement_rune, 1
+	}
+	b1 := unsafe { _bytes[1] }
+	if !utf8_is_continuation(b1) {
+		return utf8_replacement_rune, 1
+	}
+	if char_len == 2 {
+		return ((rune(b0) & 0x1f) << 6) | (rune(b1) & 0x3f), 2
+	}
+	if b0 == 0xe0 && b1 < 0xa0 {
+		return utf8_replacement_rune, 1
+	}
+	if b0 == 0xed && b1 >= 0xa0 {
+		return utf8_replacement_rune, 1
+	}
+	b2 := unsafe { _bytes[2] }
+	if !utf8_is_continuation(b2) {
+		return utf8_replacement_rune, 1
+	}
+	if char_len == 3 {
+		return ((rune(b0) & 0x0f) << 12) | ((rune(b1) & 0x3f) << 6) | (rune(b2) & 0x3f), 3
+	}
+	if b0 == 0xf0 && b1 < 0x90 {
+		return utf8_replacement_rune, 1
+	}
+	if b0 == 0xf4 && b1 > 0x8f {
+		return utf8_replacement_rune, 1
+	}
+	b3 := unsafe { _bytes[3] }
+	if !utf8_is_continuation(b3) {
+		return utf8_replacement_rune, 1
+	}
+	return ((rune(b0) & 0x07) << 18) | ((rune(b1) & 0x3f) << 12) | ((rune(b2) & 0x3f) << 6) | (rune(b3) & 0x3f), 4
+}
+
+@[direct_array_access]
+fn impl_utf8_to_utf32(_bytes &u8, _bytes_len int) rune {
+	if _bytes_len == 0 || _bytes_len > 4 {
+		return 0
+	}
+	r, len := utf8_decode_rune(_bytes, _bytes_len)
+	if len != _bytes_len {
+		return utf8_replacement_rune
+	}
+	return r
 }
 
 // Calculate string length for formatting, i.e. number of "characters"
 // This is simplified implementation. if you need specification compliant width,
 // use utf8.east_asian.display_width.
 pub fn utf8_str_visible_length(s string) int {
-	mut l := 0
-	mut ul := 1
-	for i := 0; i < s.len; i += ul {
-		c := unsafe { s.str[i] }
-		ul = ((0xe5000000 >> ((unsafe { s.str[i] } >> 3) & 0x1e)) & 3) + 1
-		if i + ul > s.len { // incomplete UTF-8 sequence
-			return l
-		}
-		l++
-		// avoid the match if not needed
-		if ul == 1 {
-			continue
-		}
-		// recognize combining characters and wide characters
-		match ul {
-			2 {
-				r := u64((u16(c) << 8) | unsafe { s.str[i + 1] })
-				if r >= 0xcc80 && r < 0xcdb0 {
-					// diacritical marks
-					l--
-				}
-			}
-			3 {
-				r := u64((u32(c) << 16) | unsafe { (u32(s.str[i + 1]) << 8) | s.str[i + 2] })
-				// diacritical marks extended
-				// diacritical marks supplement
-				// diacritical marks for symbols
-				if (r >= 0xe1aab0 && r <= 0xe1ac7f)
-					|| (r >= 0xe1b780 && r <= 0xe1b87f)
-					|| (r >= 0xe28390 && r <= 0xe2847f)
-					|| (r >= 0xefb8a0 && r <= 0xefb8af) {
-					// diacritical marks
-					l--
-				}
-				// Hangru
-				// CJK Unified Ideographics
-				// Hangru
-				// CJK
-				else if (r >= 0xe18480 && r <= 0xe1859f)
-					|| (r >= 0xe2ba80 && r <= 0xe2bf95)
-					|| (r >= 0xe38080 && r <= 0xe4b77f)
-					|| (r >= 0xe4b880 && r <= 0xea807f)
-					|| (r >= 0xeaa5a0 && r <= 0xeaa79f)
-					|| (r >= 0xeab080 && r <= 0xed9eaf)
-					|| (r >= 0xefa480 && r <= 0xefac7f)
-					|| (r >= 0xefb8b8 && r <= 0xefb9af) {
-					// half marks
-					l++
-				}
-			}
-			4 {
-				r := u64((u32(c) << 24) | unsafe {
-					(u32(s.str[i + 1]) << 16) | (u32(s.str[i + 2]) << 8) | s.str[i + 3]
-				})
-				// Enclosed Ideographic Supplement
-				// Emoji
-				// CJK Unified Ideographs Extension B-G
-				if (r >= 0x0f9f8880 && r <= 0xf09f8a8f)
-					|| (r >= 0xf09f8c80 && r <= 0xf09f9c90)
-					|| (r >= 0xf09fa490 && r <= 0xf09fa7af)
-					|| (r >= 0xf0a08080 && r <= 0xf180807f) {
-					l++
-				}
-			}
-			else {}
-		}
+	return utf8_grapheme_visible_length(s)
+}
+
+// string_to_ansi_not_null_terminated returns an ANSI version of the string `_str`.
+// NOTE: This is most useful for converting a vstring to an ANSI string under Windows.
+// NOTE: The ANSI string return is not null-terminated, then you can use `os.write_file_array` write an ANSI file.
+pub fn string_to_ansi_not_null_terminated(_str string) []u8 {
+	wstr := _str.to_wide()
+	mut ansi := wide_to_ansi(wstr)
+	if ansi.len > 0 {
+		unsafe { ansi.len-- } // remove tailing zero
 	}
-	return l
+	return ansi
 }

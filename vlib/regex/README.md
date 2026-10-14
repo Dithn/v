@@ -1,4 +1,10 @@
-# V RegEx (Regular expression) 1.0 alpha
+# Description
+
+`regex` is a small but powerful regular expression library,
+written in pure V.
+
+> **Note**
+> `regex` is *not* PCRE compatible.
 
 [TOC]
 
@@ -9,40 +15,43 @@ are valid for all the `regex` module features:
 
 1. The matching stops at the end of the string, *not* at newline characters.
 
-2. The basic atomic elements of this regex engine are the tokens. 
-In a query string a simple character is a token.
-
+2. The basic atomic elements of this regex engine are the tokens.
+   In a query string a simple character is a token.
 
 ## Differences with PCRE:
 
-NB: We must point out that the **V-Regex module is not PCRE compliant** and thus 
-some behaviour will be different. This difference is due to the V philosophy,
-to have one way and keep it simple.
+> **Note**
+> We must point out that the **V-Regex module is not PCRE compliant** and thus
+> some behaviour will be different. This difference is due to the V philosophy,
+> to have one way and keep it simple.
 
 The main differences can be summarized in the following points:
 
 - The basic element **is the token not the sequence of symbols**, and the most
-simple token, is a single character.
+  simple token, is a single character.
 
-- `|` **the OR operator acts on tokens,** for example `abc|ebc` is not 
-`abc` OR `ebc`. Instead it is evaluated like `ab`, followed by `c OR e`,
-followed by `bc`, because the **token is the base element**,
-not the sequence of symbols.
+- `|` **the OR operator acts on tokens,** for example `abc|ebc` is not
+  `abc` OR `ebc`. Instead it is evaluated like `ab`, followed by `c OR e`,
+  followed by `bc`, because the **token is the base element**,
+  not the sequence of symbols.
+  Note: **Two char classes with an `OR` in the middle is a syntax error.**
 
-- The **match operation stops at the end of the string**. It does *NOT* stop 
-at new line characters.
+  Token alternatives can be chained (`a|b|c`) and repeated (`(a|b)+`). To alternate
+  whole sequences, group each sequence: `((cat)|(dog))+` matches `dogcat`.
+  A bounded group must reach its minimum before the following token is matched:
+  `(a|b){2}z` matches `abz` and rejects `az`.
 
+- The **match operation stops at the end of the string**. It does *NOT* stop
+  at new line characters.
 
 ## Tokens
 
 The tokens are the atomic units, used by this regex engine.
 They can be one of the following:
 
-
 ### Simple char
 
 This token is a simple single character like `a` or `b` etc.
-
 
 ### Match positional delimiters
 
@@ -50,10 +59,9 @@ This token is a simple single character like `a` or `b` etc.
 
 `$` Matches the end of the string.
 
-
 ### Char class (cc)
 
-The character classes match all the chars specified inside. Use square 
+The character classes match all the chars specified inside. Use square
 brackets `[ ]` to enclose them.
 
 The sequence of the chars in the character class, is evaluated with an OR op.
@@ -64,7 +72,7 @@ but it doesn't match `C` or `z`.
 Inside a cc, it is possible to specify a "range" of characters, for example
 `[ad-h]` is equivalent to writing `[adefgh]`.
 
-A cc can have different ranges at the same time, for example `[a-zA-z0-9]` 
+A cc can have different ranges at the same time, for example `[a-zA-Z0-9]`
 matches all the latin lowercase, uppercase and numeric characters.
 
 It is possible to negate the meaning of a cc, using the caret char at the
@@ -76,28 +84,36 @@ latin chars `a-z` and all the digits `\d`.
 
 It is possible to mix all the properties of the char class together.
 
-NB: In order to match the `-` (minus) char, it must be preceded by
-    a backslash in the cc, for example `[\-_\d\a]` will match:
-      `-` minus,
-      `_` underscore, 
-      `\d` numeric chars,
-	  `\a` lower case chars.
+> **Note**
+> To match the `-` (minus) char, place it first or last in the cc, or precede it
+> with a backslash. For example, `[-a-z]` and `[a-z-]` match lowercase letters
+> and a minus, and `[\-_\d\a]` will match:
+> - `-` minus,
+> - `_` underscore,
+> - `\d` numeric chars,
+> - `\a` lower case chars.
+
+A minus immediately after a completed range is also literal. For example,
+`[a-z-0-9]` matches lowercase letters, digits, and a minus; the `a-z` range remains intact.
 
 ### Meta-chars
 
-A meta-char is specified by a backslash, before a character. 
+A meta-char is specified by a backslash, before a character.
 For example `\w` is the meta-char `w`.
 
 A meta-char can match different types of characters.
 
-* `\w` matches an alphanumeric char `[a-zA-Z0-9_]`
-* `\W` matches a non alphanumeric char
-* `\d` matches a digit `[0-9]`
-* `\D` matches a non digit
-* `\s` matches a space char, one of `[' ','\t','\n','\r','\v','\f']`
-* `\S` matches a non space char
-* `\a` matches only a lowercase char `[a-z]`
-* `\A` matches only an uppercase char `[A-Z]`
+- `\w` matches a word char `[a-zA-Z0-9_]`
+- `\W` matches a non word char
+- `\d` matches a digit `[0-9]`
+- `\D` matches a non digit
+- `\s` matches a space char, one of `[' ','\t','\n','\r','\v','\f']`
+- `\S` matches a non space char
+- `\a` matches only a lowercase char `[a-z]`
+- `\A` matches only an uppercase char `[A-Z]`
+
+- `\x41`   match a byte of value 0x41, `A` in ascii code
+- `\X414C` match two consecutive bytes of value 0x414c, `AL` in ascii code
 
 ### Quantifier
 
@@ -115,9 +131,9 @@ must be matched.
 - `{x}` matches exactly x times, `a{2}` matches `aa`, but not `aaa` or `a`
 - `{min,}` matches at least min times, `a{2,}` matches `aaa` or `aa`, not `a`
 - `{,max}` matches at least 0 times and at maximum max times,
-   for example, `a{,2}` matches `a` and `aa`, but doesn't match `aaa`
+  for example, `a{,2}` matches `a` and `aa`, but doesn't match `aaa`
 - `{min,max}` matches from min times, to max times, for example
-    `a{2,3}` matches `aa` and `aaa`, but doesn't match `a` or `aaaa`
+  `a{2,3}` matches `aa` and `aaa`, but doesn't match `a` or `aaaa`
 
 A long quantifier, may have a `greedy off` flag, that is the `?`
 character after the brackets. `{2,4}?` means to match the minimum
@@ -129,20 +145,21 @@ The dot is a particular meta-char, that matches "any char".
 
 It is simpler to explain it with an example:
 
-Suppose you have `abccc ddeef` as a source string, that you want to parse 
-with a regex. The following table show the query strings and the result of
+Suppose you have `abccc ddeef` as a source string, that you want to parse
+with a regex. The following table shows the query strings and the result of
 parsing source string.
 
-+--------------+-------------+
-| query string |   result    |
-|--------------|-------------|
+| query string | result      |
+| ------------ | ----------- |
 | `.*c`        | `abc`       |
-| `.*dd`	   | `abcc dd`   |
+| `.*dd`       | `abcc dd`   |
 | `ab.*e`      | `abccc dde` |
 | `ab.{3} .*e` | `abccc dde` |
-+--------------+-------------+
 
 The dot matches any character, until the next token match is satisfied.
+
+> Important Note: Consecutive dots, for example `...`, are not allowed.
+> This will cause a syntax error. Use a quantifier instead.
 
 ### OR token
 
@@ -150,15 +167,22 @@ The token `|`, means a logic OR operation between two consecutive tokens,
 i.e. `a|b` matches a character that is `a` or `b`.
 
 The OR token can work in a "chained way": `a|(b)|cd ` means test first `a`,
-if the char is not `a`, then test the group `(b)`, and if the group doesn't 
+if the char is not `a`, then test the group `(b)`, and if the group doesn't
 match too, finally test the token `c`.
 
-NB: ** unlike in PCRE, the OR operation works at token level!** 
-It doesn't work at concatenation level!
+> **Note**
+> Unlike in PCRE, the OR operation works at token level!
+> It doesn't work at concatenation level!
 
-That also means, that a query string like `abc|bde` is not equal to 
-`(abc)|(bde)`, but instead to `ab(c|b)de.
+> **Note**
+> Two char classes with an `OR` in the middle is a syntax error.
+
+That also means, that a query string like `abc|bde` is not equal to
+`(abc)|(bde)`, but instead to `ab(c|b)de`.
 The OR operation works only for `c|b`, not at char concatenation level.
+
+To match a choice of words, group each word into a token. For example,
+`^((cat)|(dog))$` matches either `cat` or `dog`.
 
 ### Groups
 
@@ -171,11 +195,11 @@ nested. Like all other tokens, groups can have a quantifier too.
 `(c(pa)+z ?)+` matches `cpaz cpapaz cpapapaz` or `cpapaz`
 
 Lets analyze this last case, first we have the group `#0`, that is the most
-outer round brackets `(...)+`. This group has a quantifier `+`, that say to
+outer round brackets `(...)+`. This group has a quantifier `+`, that says to
 match its content *at least one time*.
 
 Then we have a simple char token `c`, and a second group `#1`: `(pa)+`.
-This group also tries to match the sequence `pa`, *at least one time*, 
+This group also tries to match the sequence `pa`, *at least one time*,
 as specified by the `+` quantifier.
 
 Then, we have another simple token `z` and another simple token ` ?`,
@@ -183,17 +207,19 @@ i.e. the space char (ascii code 32) followed by the `?` quantifier,
 which means that the preceding space should be matched 0 or 1 time.
 
 This explains why the `(c(pa)+z ?)+` query string,
-can match `cpaz cpapaz cpapapaz` .
+can match `cpaz cpapaz cpapapaz`.
 
 In this implementation the groups are "capture groups". This means that the
 last temporal result for each group, can be retrieved from the `RE` struct.
 
-The "capture groups" are stored as indexes in the field `groups`, 
+The "capture groups" are stored as indexes in the field `groups`,
 that is an `[]int` inside the `RE` struct.
 
 **example:**
 
 ```v oksyntax
+import regex
+
 text := 'cpaz cpapaz cpapapaz'
 query := r'(c(pa)+z ?)+'
 mut re := regex.regex_opt(query) or { panic(err) }
@@ -214,13 +240,14 @@ for gi < re.groups.len {
 // 1 :[pa]
 ```
 
-**note:** *to show the `group id number` in the result of the `get_query()`*
-*the flag `debug` of the RE object must be `1` or `2`*
+> **Note**
+> To show the `group id number` in the result of the `get_query()`
+> the flag `debug` of the RE object must be `1` or `2`
 
-In order to simplify the use of the captured groups, it possible to use the
+In order to simplify the use of the captured groups, it is possible to use the
 utility function: `get_group_list`.
 
-This function return a list of groups using this support struct:
+This function returns a list of groups using this support struct:
 
 ```v oksyntax
 pub struct Re_group {
@@ -230,9 +257,11 @@ pub:
 }
 ```
 
-Here an example of use:
+Here is an example of use:
 
 ```v oksyntax
+import regex
+
 /*
 This simple function converts an HTML RGB value with 3 or 6 hex digits to
 an u32 value, this function is not optimized and it is only for didatical
@@ -241,34 +270,34 @@ purpose. Example: #A0B0CC #A9F
 fn convert_html_rgb(in_col string) u32 {
 	mut n_digit := if in_col.len == 4 { 1 } else { 2 }
 	mut col_mul := if in_col.len == 4 { 4 } else { 0 }
-	// this is the regex query, it use the V string interpolation to customize the regex query
-	// NOTE: if you want use escaped code you must use the r"" (raw) strings,
+	// this is the regex query, it uses the V string interpolation to customize the regex query
+	// Note: If you want to use escaped code you must use the r"" (raw) strings,
 	// *** please remember that the V interpoaltion doesn't work on raw strings. ***
-	query := '#([a-fA-F0-9]{$n_digit})([a-fA-F0-9]{$n_digit})([a-fA-F0-9]{$n_digit})'
+	query := '#([a-fA-F0-9]{${n_digit}})([a-fA-F0-9]{${n_digit}})([a-fA-F0-9]{${n_digit}})'
 	mut re := regex.regex_opt(query) or { panic(err) }
 	start, end := re.match_string(in_col)
-	println('start: $start, end: $end')
+	println('start: ${start}, end: ${end}')
 	mut res := u32(0)
 	if start >= 0 {
 		group_list := re.get_group_list() // this is the utility function
 		r := ('0x' + in_col[group_list[0].start..group_list[0].end]).int() << col_mul
 		g := ('0x' + in_col[group_list[1].start..group_list[1].end]).int() << col_mul
 		b := ('0x' + in_col[group_list[2].start..group_list[2].end]).int() << col_mul
-		println('r: $r g: $g b: $b')
+		println('r: ${r} g: ${g} b: ${b}')
 		res = u32(r) << 16 | u32(g) << 8 | u32(b)
 	}
 	return res
 }
 ```
 
-Others utility functions are `get_group_by_id` and `get_group_bounds_by_id` 
-that get  directly the string of a group using its `id`:
+Other utility functions are `get_group_by_id` and `get_group_bounds_by_id`
+that get directly the string of a group using its `id`:
 
 ```v ignore
-txt := "my used string...."
-for g_index := 0; g_index < re.group_count ; g_index++ {
-	println("#${g_index} [${re.get_group_by_id(txt, g_index)}] \
-    	bounds: ${re.get_group_bounds_by_id(g_index)}") 
+txt := 'my used string....'
+for g_index := 0; g_index < re.group_count; g_index++ {
+	println('#${g_index} [${re.get_group_by_id(txt, g_index)}] \
+		bounds: ${re.get_group_bounds_by_id(g_index)}')
 }
 ```
 
@@ -289,44 +318,45 @@ The `.group_csave` array will be filled then, following this logic:
 
 `re.group_csave[0]` - number of total saved records
 `re.group_csave[1+n*3]` - id of the saved group
-`re.group_csave[1+n*3]` - start index in the source string of the saved group
-`re.group_csave[1+n*3]` - end index in the source string of the saved group
+`re.group_csave[2+n*3]` - start index in the source string of the saved group
+`re.group_csave[3+n*3]` - end index in the source string of the saved group
 
-The regex will save groups, until it finishes, or finds that the array has no 
-more space. If the space ends, no error is raised, and further records will 
+The regex will save groups, until it finishes, or finds that the array has no
+more space. If the space ends, no error is raised, and further records will
 not be saved.
 
 ```v ignore
 import regex
-fn main(){
-    txt   := "http://www.ciao.mondo/hello/pippo12_/pera.html"
-    query := r"(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+"
 
-    mut re := regex.regex_opt(query) or { panic(err) }
-    //println(re.get_code())   // uncomment to see the print of the regex execution code
-    re.debug=2  // enable maximum log
-    println("String: ${txt}")
-    println("Query : ${re.get_query()}")
-    re.debug=0  // disable log
-    re.group_csave_flag = true
-    start, end := re.match_string(txt)
-    if start >= 0 {
-        println("Match ($start, $end) => [${txt[start..end]}]")
-    } else {
-        println("No Match")
-    }
+fn main() {
+	txt := 'http://www.ciao.mondo/hello/pippo12_/pera.html'
+	query := r'(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+'
 
-    if re.group_csave_flag == true && start >= 0 && re.group_csave.len > 0{
-        println("cg: $re.group_csave")
-        mut cs_i := 1
-        for cs_i < re.group_csave[0]*3 {
-            g_id := re.group_csave[cs_i]
-            st   := re.group_csave[cs_i+1]
-            en   := re.group_csave[cs_i+2]
-            println("cg[$g_id] $st $en:[${txt[st..en]}]")
-            cs_i += 3
-        }
-    }
+	mut re := regex.regex_opt(query) or { panic(err) }
+	// println(re.get_code())   // uncomment to see the print of the regex execution code
+	re.debug = 2 // enable maximum log
+	println('String: ${txt}')
+	println('Query : ${re.get_query()}')
+	re.debug = 0 // disable log
+	re.group_csave_flag = true
+	start, end := re.match_string(txt)
+	if start >= 0 {
+		println('Match (${start}, ${end}) => [${txt[start..end]}]')
+	} else {
+		println('No Match')
+	}
+
+	if re.group_csave_flag == true && start >= 0 && re.group_csave.len > 0 {
+		println('cg: ${re.group_csave}')
+		mut cs_i := 1
+		for cs_i < re.group_csave[0] * 3 {
+			g_id := re.group_csave[cs_i]
+			st := re.group_csave[cs_i + 1]
+			en := re.group_csave[cs_i + 2]
+			println('cg[${g_id}] ${st} ${en}:[${txt[st..en]}]')
+			cs_i += 3
+		}
+	}
 }
 ```
 
@@ -351,39 +381,41 @@ cg[1] 42 46:[html]
 
 This regex module supports partially the question mark `?` PCRE syntax for groups.
 
-`(?:abcd)` **non capturing group**:  the content of the group will not be saved.
+`(?:abcd)` **non capturing group**: the content of the group will not be saved.
 
-`(?P<mygroup>abcdef)` **named group:** the group content is saved and labeled 
+`(?P<mygroup>abcdef)` **named group:** the group content is saved and labeled
 as `mygroup`.
 
-The label of the groups is saved in the `group_map` of the `RE` struct, 
-that is a map from `string` to `int`, where the value is the index in 
+The label of the groups is saved in the `group_map` of the `RE` struct,
+that is a map from `string` to `int`, where the value is the index in
 `group_csave` list of indexes.
 
 Here is an example for how to use them:
+
 ```v ignore
 import regex
-fn main(){
-    txt   := "http://www.ciao.mondo/hello/pippo12_/pera.html"
-    query := r"(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+"
 
-    mut re := regex.regex_opt(query) or { panic(err) }
-    //println(re.get_code())   // uncomment to see the print of the regex execution code
-    re.debug=2  // enable maximum log
-    println("String: ${txt}")
-    println("Query : ${re.get_query()}")
-    re.debug=0  // disable log
-    start, end := re.match_string(txt)
-    if start >= 0 {
-        println("Match ($start, $end) => [${txt[start..end]}]")
-    } else {
-        println("No Match")
-    }
+fn main() {
+	txt := 'http://www.ciao.mondo/hello/pippo12_/pera.html'
+	query := r'(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+'
 
-    for name in re.group_map.keys() {
-        println("group:'$name' \t=> [${re.get_group_by_name(txt, name)}] \
-        bounds: ${re.get_group_bounds_by_name(name)}")
-    }
+	mut re := regex.regex_opt(query) or { panic(err) }
+	// println(re.get_code())   // uncomment to see the print of the regex execution code
+	re.debug = 2 // enable maximum log
+	println('String: ${txt}')
+	println('Query : ${re.get_query()}')
+	re.debug = 0 // disable log
+	start, end := re.match_string(txt)
+	if start >= 0 {
+		println('Match (${start}, ${end}) => [${txt[start..end]}]')
+	} else {
+		println('No Match')
+	}
+
+	for name in re.group_map.keys() {
+		println("group:'${name}' \t=> [${re.get_group_by_name(txt, name)}] \
+			bounds: ${re.get_group_bounds_by_name(name)}")
+	}
 }
 ```
 
@@ -401,25 +433,28 @@ In order to simplify the use of the named groups, it is possible to
 use a name map in the `re` struct, using the function `re.get_group_by_name`.
 
 Here is a more complex example of using them:
+
 ```v oksyntax
-// This function demostrate the use of the named groups
+import regex
+
+// This function demonstrate the use of the named groups
 fn convert_html_rgb_n(in_col string) u32 {
 	mut n_digit := if in_col.len == 4 { 1 } else { 2 }
 	mut col_mul := if in_col.len == 4 { 4 } else { 0 }
-	query := '#(?P<red>[a-fA-F0-9]{$n_digit})' + '(?P<green>[a-fA-F0-9]{$n_digit})' +
-		'(?P<blue>[a-fA-F0-9]{$n_digit})'
+	query := '#(?P<red>[a-fA-F0-9]{${n_digit}})' + '(?P<green>[a-fA-F0-9]{${n_digit}})' +
+		'(?P<blue>[a-fA-F0-9]{${n_digit}})'
 	mut re := regex.regex_opt(query) or { panic(err) }
 	start, end := re.match_string(in_col)
-	println('start: $start, end: $end')
+	println('start: ${start}, end: ${end}')
 	mut res := u32(0)
 	if start >= 0 {
-		red_s, red_e := re.get_group_by_name('red')
+		red_s, red_e := re.get_group_bounds_by_name('red')
 		r := ('0x' + in_col[red_s..red_e]).int() << col_mul
-		green_s, green_e := re.get_group_by_name('green')
+		green_s, green_e := re.get_group_bounds_by_name('green')
 		g := ('0x' + in_col[green_s..green_e]).int() << col_mul
-		blue_s, blue_e := re.get_group_by_name('blue')
+		blue_s, blue_e := re.get_group_bounds_by_name('blue')
 		b := ('0x' + in_col[blue_s..blue_e]).int() << col_mul
-		println('r: $r g: $g b: $b')
+		println('r: ${r} g: ${g} b: ${b}')
 		res = u32(r) << 16 | u32(g) << 8 | u32(b)
 	}
 	return res
@@ -430,14 +465,12 @@ Other utilities are `get_group_by_name` and `get_group_bounds_by_name`,
 that return the string of a group using its `name`:
 
 ```v ignore
-txt := "my used string...."
+txt := 'my used string....'
 for name in re.group_map.keys() {
-	println("group:'$name' \t=> [${re.get_group_by_name(txt, name)}] \
-    bounds: ${re.get_group_bounds_by_name(name)}")
+	println("group:'${name}' \t=> [${re.get_group_by_name(txt, name)}] \
+		bounds: ${re.get_group_bounds_by_name(name)}")
 }
 ```
-
-
 
 ### Groups query functions
 
@@ -445,10 +478,10 @@ These functions are helpers to query the captured groups
 
 ```v ignore
 // get_group_bounds_by_name get a group boundaries by its name
-pub fn (re RE) get_group_bounds_by_name(group_name string) (int, int) 
+pub fn (re RE) get_group_bounds_by_name(group_name string) (int, int)
 
-// get_group_by_name get a group string by its name
-pub fn (re RE) get_group_by_name(group_name string) string
+// get_group_by_name gets a group string by its name
+pub fn (re &RE) get_group_by_name(in_txt string, group_name string) string
 
 // get_group_by_id get a group boundaries by its id
 pub fn (re RE) get_group_bounds_by_id(group_id int) (int,int)
@@ -474,28 +507,30 @@ the behavior of the parser itself.
 ```v ignore
 // example of flag settings
 mut re := regex.new()
-re.flag = regex.F_BIN
+re.flag = regex.f_bin
 ```
 
-- `F_BIN`: parse a string as bytes, utf-8 management disabled.
+- `f_bin`: parse a string as bytes, utf-8 management disabled.
 
-- `F_EFM`: exit on the first char matches in the query, used by the 
-           find function.
-		   
-- `F_MS`:  matches only if the index of the start match is 0,
-           same as `^` at the start of the query string.
-		   
-- `F_ME`:  matches only if the end index of the match is the last char
-           of the input string, same as `$` end of query string.
-		   
-- `F_NL`:  stop the matching if found a new line char `\n` or `\r`
+- `f_ci`: match ASCII letters without case sensitivity.
+
+- `f_efm`: exit on the first char matches in the query, used by the
+  find function.
+
+- `f_ms`: matches only if the index of the start match is 0,
+  same as `^` at the start of the query string.
+
+- `f_me`: matches only if the end index of the match is the last char
+  of the input string, same as `$` end of query string.
+
+- `f_nl`: stop the matching if found a new line char `\n` or `\r`
 
 ## Functions
 
 ### Initializer
 
-These functions are helper that create the `RE` struct,
-a `RE` struct can be created manually if you needed.
+These functions are helpers that create the `RE` struct.
+A `RE` struct can be created manually if needed.
 
 #### **Simplified initializer**
 
@@ -507,34 +542,17 @@ pub fn regex_opt(in_query string) ?RE
 #### **Base initializer**
 
 ```v ignore
-// new_regex create a REgex of small size, usually sufficient for ordinary use
+// new create a RE of small size, usually sufficient for ordinary use
 pub fn new() RE
-
 ```
-#### **Custom initialization**
-For some particular needs, it is possible to initialize a fully customized regex:
-```v ignore
-pattern = r"ab(.*)(ac)"
-// init custom regex
-mut re := regex.RE{}
-// max program length, can not be longer then the pattern
-re.prog = []Token    {len: pattern.len + 1}
-// can not be more char class the the length of the pattern
-re.cc   = []CharClass{len: pattern.len}
 
-re.group_csave_flag = false          // true enable continuos group saving if needed
-re.group_max_nested = 128            // set max 128 group nested possible
-re.group_max        = pattern.len>>1 // we can't have more groups than the half of the pattern legth
-re.group_stack = []int{len: re.group_max, init: -1}
-re.group_data  = []int{len: re.group_max, init: -1}
-```
 ### Compiling
 
 After an initializer is used, the regex expression must be compiled with:
 
 ```v ignore
-// compile compiles the REgex returning an error if the compilation fails
-pub fn (re mut RE) compile_opt(in_txt string) ?
+// compile_opt compile RE pattern string, returning an error if the compilation fails
+pub fn (mut re RE) compile_opt(pattern string) !
 ```
 
 ### Matching Functions
@@ -543,47 +561,46 @@ These are the matching functions
 
 ```v ignore
 // match_string try to match the input string, return start and end index if found else start is -1
-pub fn (re mut RE) match_string(in_txt string) (int,int)
-
+pub fn (mut re RE) match_string(in_txt string) (int, int)
 ```
 
 ## Find and Replace
 
-There are the following find  and replace functions:
+There are the following find and replace functions:
 
 #### Find functions
 
 ```v ignore
 // find try to find the first match in the input string
 // return start and end index if found else start is -1
-pub fn (re mut RE) find(in_txt string) (int,int)
+pub fn (mut re RE) find(in_txt string) (int, int)
 
 // find_all find all the "non overlapping" occurrences of the matching pattern
-// return a list of start end indexes like: [3,4,6,8] 
+// return a list of start end indexes like: [3,4,6,8]
 // the matches are [3,4] and [6,8]
-pub fn (re mut RE) find_all(in_txt string) []int
+pub fn (mut re RE) find_all(in_txt string) []int
 
-// find_all find all the "non overlapping" occurrences of the matching pattern
+// find_all_str find all the "non overlapping" occurrences of the match pattern
 // return a list of strings
-// the result is like ["first match","secon match"]
+// the result is like ['first match','secon match']
 pub fn (mut re RE) find_all_str(in_txt string) []string
 ```
 
 #### Replace functions
 
 ```v ignore
-// replace return a string where the matches are replaced with the repl_str string, 
-// this function support groups in the replace string
-pub fn (re mut RE) replace(in_txt string, repl string) string
+// replace return a string where the matches are replaced with the repl_str string,
+// this function supports groups in the replace string
+pub fn (re &RE) replace(in_txt string, repl string) string
 ```
 
 replace string can include groups references:
 
 ```v ignore
-txt   := "Today it is a good day."
+txt := 'Today it is a good day.'
 query := r'(a\w)[ ,.]'
-mut re := regex.regex_opt(query)?
-res := re.replace(txt, r"__[\0]__")
+re := regex.regex_opt(query)?
+res := re.replace(txt, r'__[\0]__')
 ```
 
 in this example we used the group `0` in the replace string: `\0`, the result will be:
@@ -592,7 +609,8 @@ in this example we used the group `0` in the replace string: `\0`, the result wi
 Today it is a good day. => Tod__[ay]__it is a good d__[ay]__
 ```
 
-**Note:** in the replace strings can be used only groups from `0` to `9`.
+> **Note**
+> In the replace strings can be used only groups from `0` to `9`.
 
 If the usage of `groups` in the replace process, is not needed, it is possible
 to use a quick function:
@@ -602,10 +620,21 @@ to use a quick function:
 pub fn (mut re RE) replace_simple(in_txt string, repl string) string
 ```
 
+If it is needed to replace N instances of the found strings it is possible to use:
+
+```v ignore
+// replace_n return a string where the first `count` matches are replaced with the repl_str string
+// `count` indicate the number of max replacements that will be done.
+// if count is > 0 the replace began from the start of the string toward the end
+// if count is < 0 the replace began from the end of the string toward the start
+// if count is 0 do nothing
+pub fn (mut re RE) replace_n(in_txt string, repl_str string, count int) string
+```
+
 #### Custom replace function
 
 For complex find and replace operations, you can use `replace_by_fn` .
-The `replace_by_fn`, uses a custom replace callback function, thus 
+The `replace_by_fn`, uses a custom replace callback function, thus
 allowing customizations. The custom callback function is called for
 every non overlapped find.
 
@@ -617,7 +646,7 @@ The custom callback function must be of the type:
 // start   index of the start of the match in in_txt
 // end     index of the end   of the match in in_txt
 // --- the match is in in_txt[start..end] ---
-fn (re RE, in_txt string, start int, end int) string 
+fn (re RE, in_txt string, start int, end int) string
 ```
 
 The following example will clarify its usage:
@@ -626,21 +655,22 @@ The following example will clarify its usage:
 import regex
 // customized replace functions
 // it will be called on each non overlapped find
+
 fn my_repl(re regex.RE, in_txt string, start int, end int) string {
-    g0 := re.get_group_by_id(in_txt, 0)
-    g1 := re.get_group_by_id(in_txt, 1)
-    g2 := re.get_group_by_id(in_txt, 2)
-    return "*$g0*$g1*$g2*"    
+	g0 := re.get_group_by_id(in_txt, 0)
+	g1 := re.get_group_by_id(in_txt, 1)
+	g2 := re.get_group_by_id(in_txt, 2)
+	return '*${g0}*${g1}*${g2}*'
 }
 
-fn main(){
-    txt   := "today [John] is gone to his house with (Jack) and [Marie]."
-    query := r"(.)(\A\w+)(.)"
+fn main() {
+	txt := 'today [John] is gone to his house with (Jack) and [Marie].'
+	query := r'(.)(\A\w+)(.)'
 
-    mut re := regex.regex_opt(query) or { panic(err) }
-   
-    result := re.replace_by_fn(txt, my_repl)
-    println(result)
+	mut re := regex.regex_opt(query) or { panic(err) }
+
+	result := re.replace_by_fn(txt, my_repl)
+	println(result)
 }
 ```
 
@@ -649,8 +679,6 @@ Output:
 ```
 today *[*John*]* is gone to his house with *(*Jack*)* and *[*Marie*]*.
 ```
-
-
 
 ## Debugging
 
@@ -703,7 +731,7 @@ PC: 10 ist: 88000000 PROG_END {  0,  0}
 
 `query_ch` is the type of token.
 
-`{m,n}` is the quantifier, the greedy off flag  `?`  will be showed if present in the token
+`{m,n}` is the quantifier, the greedy off flag `?` will be showed if present in the token
 
 ### **Log debug**
 
@@ -771,7 +799,7 @@ output function:
 ```v oksyntax
 // custom print function, the input will be the regex debug string
 fn custom_print(txt string) {
-	println('my log: $txt')
+	println('my log: ${txt}')
 }
 
 mut re := new()
@@ -786,87 +814,26 @@ Here an example that perform some basically match of strings
 ```v ignore
 import regex
 
-fn main(){
-    txt   := "http://www.ciao.mondo/hello/pippo12_/pera.html"
-    query := r"(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+"
+fn main() {
+	txt := 'http://www.ciao.mondo/hello/pippo12_/pera.html'
+	query := r'(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+'
 
-    mut re := regex.regex_opt(query) or { panic(err) }
-   
-    start, end := re.match_string(txt)
-    if start >= 0 {
-        println("Match ($start, $end) => [${txt[start..end]}]")
-        for g_index := 0; g_index < re.group_count ; g_index++ {
-            println("#${g_index} [${re.get_group_by_id(txt, g_index)}] \
-            bounds: ${re.get_group_bounds_by_id(g_index)}")  
-        }
-        for name in re.group_map.keys() {
-            println("group:'$name' \t=> [${re.get_group_by_name(txt, name)}] \
-            bounds: ${re.get_group_bounds_by_name(name)}")
-        }
-    } else {
-        println("No Match")
-    }
-}
-```
-Here an example of total customization of the regex environment creation:
-```v ignore
-import regex
+	mut re := regex.regex_opt(query) or { panic(err) }
 
-fn main(){
-    txt   := "today John is gone to his house with Jack and Marie."
-    query := r"(?:(?P<word>\A\w+)|(?:\a\w+)[\s.]?)+"
-
-    // init regex
-    mut re := regex.RE{}
-	// max program length, can not be longer then the query
-    re.prog = []regex.Token    {len: query.len + 1} 
-	// can not be more char class the the length of the query
-    re.cc   = []regex.CharClass{len: query.len}     
-    re.prog = []regex.Token    {len: query.len+1}
-	// enable continuos group saving
-    re.group_csave_flag = true         
-	// set max 128 group nested
-    re.group_max_nested = 128          
-	// we can't have more groups than the half of the query legth 
-    re.group_max        = query.len>>1 
-    
-    // compile the query
-    re.compile_opt(query) or { panic(err) }
-
-    start, end := re.match_string(txt)
-    if start >= 0 {
-        println("Match ($start, $end) => [${txt[start..end]}]")
-    } else {
-        println("No Match")
-    }
-
-    // show results for continuos group saving
-    if re.group_csave_flag == true && start >= 0 && re.group_csave.len > 0{
-        println("cg: $re.group_csave")
-        mut cs_i := 1
-        for cs_i < re.group_csave[0]*3 {
-            g_id := re.group_csave[cs_i]
-            st   := re.group_csave[cs_i+1]
-            en   := re.group_csave[cs_i+2]
-            println("cg[$g_id] $st $en:[${txt[st..en]}]")
-            cs_i += 3
-        }
-    }
-
-    // show results for captured groups
-    if start >= 0 {
-        println("Match ($start, $end) => [${txt[start..end]}]")
-        for g_index := 0; g_index < re.group_count ; g_index++ {
-            println("#${g_index} [${re.get_group_by_id(txt, g_index)}] \
-            bounds: ${re.get_group_bounds_by_id(g_index)}")  
-        }
-        for name in re.group_map.keys() {
-            println("group:'$name' \t=> [${re.get_group_by_name(txt, name)}] \
-            bounds: ${re.get_group_bounds_by_name(name)}")
-        }
-    } else {
-        println("No Match")
-    }
+	start, end := re.match_string(txt)
+	if start >= 0 {
+		println('Match (${start}, ${end}) => [${txt[start..end]}]')
+		for g_index := 0; g_index < re.group_count; g_index++ {
+			println('#${g_index} [${re.get_group_by_id(txt, g_index)}] \
+				bounds: ${re.get_group_bounds_by_id(g_index)}')
+		}
+		for name in re.group_map.keys() {
+			println("group:'${name}' \t=> [${re.get_group_by_name(txt, name)}] \
+				bounds: ${re.get_group_bounds_by_name(name)}")
+		}
+	} else {
+		println('No Match')
+	}
 }
 ```
 

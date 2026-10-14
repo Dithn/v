@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
@@ -6,12 +6,18 @@ module runtime
 
 import os
 
-// nr_jobs returns the same as `nr_cpus` with the difference that if an
-// environment variable `VJOBS` is set, and has a value > 0,
+// nr_jobs returns the same as `nr_cpus`, but influenced by the env variable `VJOBS`.
+// If the environment variable `VJOBS` is set, and has a value > 0,
 // then `nr_jobs` will return that number instead.
 // This is useful for runtime tweaking of e.g. threaded or concurrent code.
 pub fn nr_jobs() int {
-	mut cpus := nr_cpus() - 1
+	$if cross ? {
+		// A single thread is *more likely* to work consistently everywhere during bootstrapping.
+		// NB: the compiler itself uses runtime.nr_jobs() and sync.pool to process things in parallel
+		// in its cgen stage. Returning 1 here, increases the chances of it working on non linux systems.
+		return 1
+	}
+	mut cpus := nr_cpus()
 	// allow for overrides, for example using `VJOBS=32 ./v test .`
 	vjobs := os.getenv('VJOBS').int()
 	if vjobs > 0 {

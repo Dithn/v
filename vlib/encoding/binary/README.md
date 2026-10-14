@@ -1,0 +1,152 @@
+## Description
+
+`encoding.binary` contains utility functions for converting between an array of bytes (`[]u8`)
+and unsigned integers of various widths (`u16`, `u32`, and `u64`).
+
+Also, it provide functions `encode_binary[T]()` and `decode_binary[T]()` which can converting 
+between an array of bytes (`[]u8`) and generic type `T`.
+
+There are two ways in which bytes can be encoded:
+
+1. Little endian: The least significant bytes are stored first, followed by the most
+   significant bytes.
+2. Big endian: The most significant bytes are stored first, opposite to the little endian
+   convention.
+
+For example, let us take the number `0x12345678`. In little endian, the bytes are extracted as
+`0x78`, `0x56`, `0x34`, and `0x12`. In big endian, the bytes are `0x12`, `0x34`, `0x56`,
+and `0x78`.
+
+We follow a similar procedure when we want to go the other way around. Consider the second
+sequence of bytes in the previous example: `0x12`, `0x34`, `0x56`, and `0x78`. If we encode
+this sequence in little endian format, we get the integer `0x78563412`. If we encode this
+sequence in big endian, we get `0x12345678`.
+
+> **Note**
+> The endian decode and put functions require enough bytes within the supplied slice for the
+> requested integer width (2, 4, or 8 bytes). The `_at` variants also require a nonnegative
+> offset and enough bytes after it; the `_end` variants use the final bytes of the slice.
+> Invalid lengths or offsets panic before any read or write, even when the slice has a larger
+> backing array. `little_endian_f32_at` follows the same rule for its 4-byte value.
+
+IEEE 754 floats can be read or written at an offset with `little_endian_f32_at`,
+`big_endian_f32_at`, `little_endian_f64_at`, `big_endian_f64_at`, and their
+`little_endian_put_f32_at`, `big_endian_put_f32_at`, `little_endian_put_f64_at`,
+`big_endian_put_f64_at` counterparts. These preserve the exact floating point bits,
+including negative zero, subnormal values, infinities, and NaN payloads. The `_at`
+bounds requirements above apply to all of them; `f32` needs four bytes and `f64` needs eight.
+
+For generic `T` data encoding/decoding, you can use `encode_binary[T]()` and `decode_binary[T]()`:
+
+```v oksyntax
+module main
+
+import encoding.binary
+
+struct MyStruct {
+	g_u8 u8
+}
+
+struct ComplexStruct {
+mut:
+	f_u8      u8
+	f_u32     u32 @[serialize: '-'] // this field will be skipped
+	f_u64     u64
+	f_string  string
+	f_structs []MyStruct
+	f_maps    []map[string]string
+}
+
+fn main() {
+	a := ComplexStruct{
+		f_u8:      u8(10)
+		f_u32:     u32(1024)
+		f_u64:     u64(2048)
+		f_string:  'serialize me'
+		f_structs: [
+			MyStruct{
+				g_u8: u8(1)
+			},
+			MyStruct{
+				g_u8: u8(2)
+			},
+			MyStruct{
+				g_u8: u8(3)
+			},
+		]
+		f_maps:    [
+			{
+				'abc': 'def'
+			},
+			{
+				'123': '456'
+			},
+			{
+				',./': '!@#'
+			},
+		]
+	}
+
+	b := binary.encode_binary(a)!
+	mut c := binary.decode_binary[ComplexStruct](b)!
+
+	// because there skipped field in `a`, a != c
+	assert a != c
+
+	c.f_u32 = u32(1024)
+	assert a == c
+}
+```
+
+For Go-style fixed-size stream I/O, you can use `read()`, `write()`, and `size()` with
+`binary.little_endian` or `binary.big_endian`:
+
+```v
+module main
+
+import encoding.binary
+import io
+
+struct Header {
+	version u16
+	flags   u16
+	length  u32
+}
+
+struct Buffer {
+mut:
+	data []u8
+	pos  int
+}
+
+fn (mut b Buffer) read(mut out []u8) !int {
+	if b.pos >= b.data.len {
+		return io.Eof{}
+	}
+	n := if out.len < b.data.len - b.pos { out.len } else { b.data.len - b.pos }
+	copy(mut out[..n], b.data[b.pos..b.pos + n])
+	b.pos += n
+	return n
+}
+
+fn (mut b Buffer) write(src []u8) !int {
+	b.data << src
+	return src.len
+}
+
+fn main() {
+	header := Header{
+		version: 1
+		flags:   2
+		length:  32
+	}
+	mut buf := Buffer{}
+	binary.write(mut buf, binary.big_endian, header)!
+	assert binary.size(header) == 8
+
+	buf.pos = 0
+	mut decoded := Header{}
+	binary.read(mut buf, binary.big_endian, mut decoded)!
+	assert decoded == header
+}
+```

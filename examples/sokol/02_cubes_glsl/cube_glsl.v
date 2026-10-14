@@ -1,3 +1,4 @@
+// vtest build: misc-tooling // needs .h files that are produced by `v shader`
 /**********************************************************************
 *
 * Sokol 3d cube demo
@@ -7,31 +8,13 @@
 * that can be found in the LICENSE file.
 *
 * HOW TO COMPILE SHADERS:
-* - download the sokol shader convertor tool from https://github.com/floooh/sokol-tools-bin
-*
-* - compile the .glsl shader with:
-* linux  :  sokol-shdc --input cube_glsl.glsl --output cube_glsl.h --slang glsl330
-* windows:  sokol-shdc.exe --input cube_glsl.glsl --output cube_glsl.h --slang glsl330
-*
-* --slang parameter can be:
-* - glsl330: desktop GL
-* - glsl100: GLES2 / WebGL
-* - glsl300es: GLES3 / WebGL2
-* - hlsl4: D3D11
-* - hlsl5: D3D11
-* - metal_macos: Metal on macOS
-* - metal_ios: Metal on iOS device
-* - metal_sim: Metal on iOS simulator
-* - wgpu: WebGPU
-*
-* you can have multiple platforms at the same time passing prameter like this: --slang glsl330:hlsl5:metal_macos
-* for further infos have a look at the sokol shader tool docs.
+* Run `v shader .` in this directory to compile the shaders.
+* For more info and help with shader compilation see `docs.md` and `v help shader`.
 *
 * TODO:
 * - add instancing
 **********************************************************************/
 import gg
-import gx
 // import math
 import sokol.sapp
 import sokol.gfx
@@ -40,29 +23,27 @@ import time
 import gg.m4
 
 // GLSL Include and functions
-#flag -I @VMODROOT/.
-#include "cube_glsl.h" #Please use sokol-shdc to generate the necessary cube_glsl.h file from cube_glsl.glsl (see the instructions at the top of this file)
+#include "@VMODROOT/cube_glsl.h" # It should be generated with `v shader .` (see the instructions at the top of this file)
 
-fn C.cube_shader_desc(gfx.Backend) &C.sg_shader_desc
+fn C.cube_shader_desc(gfx.Backend) &gfx.ShaderDesc
 
-const (
-	win_width  = 800
-	win_height = 800
-	bg_color   = gx.white
-)
+const win_width = 800
+const win_height = 800
+const bg_color = gg.white
 
 struct App {
 mut:
-	gg          &gg.Context
-	pip_3d      C.sgl_pipeline
-	texture     C.sg_image
+	gg          &gg.Context = unsafe { nil }
+	pip_3d      sgl.Pipeline
+	texture     gfx.Image
+	sampler     gfx.Sampler
 	init_flag   bool
 	frame_count int
 	mouse_x     int = -1
 	mouse_y     int = -1
 	// glsl
-	cube_pip_glsl C.sg_pipeline
-	cube_bind     C.sg_bindings
+	cube_pip_glsl gfx.Pipeline
+	cube_bind     gfx.Bindings
 	// time
 	ticks i64
 }
@@ -72,43 +53,33 @@ mut:
 * Texture functions
 *
 ******************************************************************************/
-fn create_texture(w int, h int, buf &byte) C.sg_image {
+fn create_texture(w int, h int, buf &u8) (gfx.Image, gfx.Sampler) {
 	sz := w * h * 4
-	mut img_desc := C.sg_image_desc{
-		width: w
-		height: h
-		num_mipmaps: 0
-		min_filter: .linear
-		mag_filter: .linear
+	mut img_desc := gfx.ImageDesc{
+		width:         w
+		height:        h
+		num_mipmaps:   0
 		// usage: .dynamic
-		wrap_u: .clamp_to_edge
-		wrap_v: .clamp_to_edge
-		label: &byte(0)
+		label:         &char(unsafe { nil })
 		d3d11_texture: 0
 	}
 	// comment if .dynamic is enabled
-	img_desc.data.subimage[0][0] = C.sg_range{
-		ptr: buf
-		size: size_t(sz)
+	img_desc.data.subimage[0][0] = gfx.Range{
+		ptr:  buf
+		size: usize(sz)
 	}
 
-	sg_img := C.sg_make_image(&img_desc)
-	return sg_img
-}
+	sg_img := gfx.make_image(&img_desc)
 
-fn destroy_texture(sg_img C.sg_image) {
-	C.sg_destroy_image(sg_img)
-}
-
-// Use only if usage: .dynamic is enabled
-fn update_text_texture(sg_img C.sg_image, w int, h int, buf &byte) {
-	sz := w * h * 4
-	mut tmp_sbc := C.sg_image_data{}
-	tmp_sbc.subimage[0][0] = C.sg_range{
-		ptr: buf
-		size: size_t(sz)
+	mut smp_desc := gfx.SamplerDesc{
+		min_filter: .linear
+		mag_filter: .linear
+		wrap_u:     .clamp_to_edge
+		wrap_v:     .clamp_to_edge
 	}
-	C.sg_update_image(sg_img, &tmp_sbc)
+
+	sg_smp := gfx.make_sampler(&smp_desc)
+	return sg_img, sg_smp
 }
 
 /******************************************************************************
@@ -119,48 +90,55 @@ fn update_text_texture(sg_img C.sg_image, w int, h int, buf &byte) {
 fn draw_triangle() {
 	sgl.defaults()
 	sgl.begin_triangles()
-	sgl.v2f_c3b( 0.0,  0.5, 255, 0  , 0  )
-	sgl.v2f_c3b(-0.5, -0.5,   0, 0  , 255)
-	sgl.v2f_c3b( 0.5, -0.5,   0, 255, 0  )
+	{
+		// vfmt off
+		sgl.v2f_c3b( 0.0,  0.5, 255, 0  , 0  )
+		sgl.v2f_c3b(-0.5, -0.5,   0, 0  , 255)
+		sgl.v2f_c3b( 0.5, -0.5,   0, 255, 0  )
+		// vfmt on
+	}
 	sgl.end()
 }
 
 // vertex specification for a cube with colored sides and texture coords
 fn cube() {
 	sgl.begin_quads()
-	// edge color
-	sgl.c3f(1.0, 0.0, 0.0)
-	// edge coord
-	// x,y,z, texture cord: u,v
-	sgl.v3f_t2f(-1.0,  1.0, -1.0, -1.0,  1.0)
-	sgl.v3f_t2f( 1.0,  1.0, -1.0,  1.0,  1.0)
-	sgl.v3f_t2f( 1.0, -1.0, -1.0,  1.0, -1.0)
-	sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
-	sgl.c3f(0.0, 1.0, 0.0)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0, -1.0,  1.0)
-	sgl.v3f_t2f( 1.0, -1.0,  1.0,  1.0,  1.0)
-	sgl.v3f_t2f( 1.0,  1.0,  1.0,  1.0, -1.0)
-	sgl.v3f_t2f(-1.0,  1.0,  1.0, -1.0, -1.0)
-	sgl.c3f(0.0, 0.0, 1.0)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0, -1.0,  1.0)
-	sgl.v3f_t2f(-1.0,  1.0,  1.0,  1.0,  1.0)
-	sgl.v3f_t2f(-1.0,  1.0, -1.0,  1.0, -1.0)
-	sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
-	sgl.c3f(1.0, 0.5, 0.0)
-	sgl.v3f_t2f(1.0, -1.0,  1.0, -1.0,   1.0)
-	sgl.v3f_t2f(1.0, -1.0, -1.0,  1.0,   1.0)
-	sgl.v3f_t2f(1.0,  1.0, -1.0,  1.0,  -1.0)
-	sgl.v3f_t2f(1.0,  1.0,  1.0, -1.0,  -1.0)
-	sgl.c3f(0.0, 0.5, 1.0)
-	sgl.v3f_t2f( 1.0, -1.0, -1.0, -1.0,  1.0)
-	sgl.v3f_t2f( 1.0, -1.0,  1.0,  1.0,  1.0)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0,  1.0, -1.0)
-	sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
-	sgl.c3f(1.0, 0.0, 0.5)
-	sgl.v3f_t2f(-1.0,  1.0, -1.0, -1.0,  1.0)
-	sgl.v3f_t2f(-1.0,  1.0,  1.0,  1.0,  1.0)
-	sgl.v3f_t2f( 1.0,  1.0,  1.0,  1.0, -1.0)
-	sgl.v3f_t2f( 1.0,  1.0, -1.0, -1.0, -1.0)
+	{
+		// vfmt off
+		sgl.c3f(1.0, 0.0, 0.0) // edge color
+		// edge coordinates
+		// x,y,z, texture cord: u,v
+		sgl.v3f_t2f(-1.0,  1.0, -1.0, -1.0,  1.0)
+		sgl.v3f_t2f( 1.0,  1.0, -1.0,  1.0,  1.0)
+		sgl.v3f_t2f( 1.0, -1.0, -1.0,  1.0, -1.0)
+		sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
+		sgl.c3f(0.0, 1.0, 0.0)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0, -1.0,  1.0)
+		sgl.v3f_t2f( 1.0, -1.0,  1.0,  1.0,  1.0)
+		sgl.v3f_t2f( 1.0,  1.0,  1.0,  1.0, -1.0)
+		sgl.v3f_t2f(-1.0,  1.0,  1.0, -1.0, -1.0)
+		sgl.c3f(0.0, 0.0, 1.0)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0, -1.0,  1.0)
+		sgl.v3f_t2f(-1.0,  1.0,  1.0,  1.0,  1.0)
+		sgl.v3f_t2f(-1.0,  1.0, -1.0,  1.0, -1.0)
+		sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
+		sgl.c3f(1.0, 0.5, 0.0)
+		sgl.v3f_t2f(1.0, -1.0,  1.0, -1.0,   1.0)
+		sgl.v3f_t2f(1.0, -1.0, -1.0,  1.0,   1.0)
+		sgl.v3f_t2f(1.0,  1.0, -1.0,  1.0,  -1.0)
+		sgl.v3f_t2f(1.0,  1.0,  1.0, -1.0,  -1.0)
+		sgl.c3f(0.0, 0.5, 1.0)
+		sgl.v3f_t2f( 1.0, -1.0, -1.0, -1.0,  1.0)
+		sgl.v3f_t2f( 1.0, -1.0,  1.0,  1.0,  1.0)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0,  1.0, -1.0)
+		sgl.v3f_t2f(-1.0, -1.0, -1.0, -1.0, -1.0)
+		sgl.c3f(1.0, 0.0, 0.5)
+		sgl.v3f_t2f(-1.0,  1.0, -1.0, -1.0,  1.0)
+		sgl.v3f_t2f(-1.0,  1.0,  1.0,  1.0,  1.0)
+		sgl.v3f_t2f( 1.0,  1.0,  1.0,  1.0, -1.0)
+		sgl.v3f_t2f( 1.0,  1.0, -1.0, -1.0, -1.0)
+		// vfmt on
+	}
 	sgl.end()
 }
 
@@ -180,56 +158,65 @@ fn draw_cubes(app App) {
 	sgl.rotate(sgl.rad(rot[1]), 0.0, 1.0, 0.0)
 	cube()
 	sgl.push_matrix()
-	sgl.translate(0.0, 0.0, 3.0)
-	sgl.scale(0.5, 0.5, 0.5)
-	sgl.rotate(-2.0 * sgl.rad(rot[0]), 1.0, 0.0, 0.0)
-	sgl.rotate(-2.0 * sgl.rad(rot[1]), 0.0, 1.0, 0.0)
-	cube()
-	sgl.push_matrix()
-	sgl.translate(0.0, 0.0, 3.0)
-	sgl.scale(0.5, 0.5, 0.5)
-	sgl.rotate(-3.0 * sgl.rad(2 * rot[0]), 1.0, 0.0, 0.0)
-	sgl.rotate( 3.0 * sgl.rad(2 * rot[1]), 0.0, 0.0, 1.0)
-	cube()
-	sgl.pop_matrix()
+	{
+		sgl.translate(0.0, 0.0, 3.0)
+		sgl.scale(0.5, 0.5, 0.5)
+		sgl.rotate(-2.0 * sgl.rad(rot[0]), 1.0, 0.0, 0.0)
+		sgl.rotate(-2.0 * sgl.rad(rot[1]), 0.0, 1.0, 0.0)
+		cube()
+		sgl.push_matrix()
+		{
+			sgl.translate(0.0, 0.0, 3.0)
+			sgl.scale(0.5, 0.5, 0.5)
+			// vfmt off
+			sgl.rotate(-3.0 * sgl.rad(2 * rot[0]), 1.0, 0.0, 0.0)
+			sgl.rotate( 3.0 * sgl.rad(2 * rot[1]), 0.0, 0.0, 1.0)
+			// vfmt on
+			cube()
+		}
+		sgl.pop_matrix()
+	}
 	sgl.pop_matrix()
 }
 
 fn cube_texture(r f32, g f32, b f32) {
 	sgl.begin_quads()
-	// edge color
-	sgl.c3f(r, g, b)
-	// edge coord
-	// x,y,z, texture cord: u,v
-	sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.0 , 0.25)
-	sgl.v3f_t2f( 1.0,  1.0, -1.0,  0.25, 0.25)
-	sgl.v3f_t2f( 1.0, -1.0, -1.0,  0.25, 0.0 )
-	sgl.v3f_t2f(-1.0, -1.0, -1.0,  0.0 , 0.0 )
-	sgl.c3f(r, g, b)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0,  0.0 , 0.25)
-	sgl.v3f_t2f( 1.0, -1.0,  1.0,  0.25, 0.25)
-	sgl.v3f_t2f( 1.0,  1.0,  1.0,  0.25, 0.0 )
-	sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.0 , 0.0 )
-	sgl.c3f(r, g, b)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0,  0.0 , 0.25)
-	sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.25, 0.25)
-	sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.25, 0.0 )
-	sgl.v3f_t2f(-1.0, -1.0, -1.0,  0.0 , 0.0 )
-	sgl.c3f(r, g, b)
-	sgl.v3f_t2f(1.0, -1.0,  1.0,  0.0 , 0.25)
-	sgl.v3f_t2f(1.0, -1.0, -1.0,  0.25, 0.25)
-	sgl.v3f_t2f(1.0,  1.0, -1.0,  0.25, 0.0 )
-	sgl.v3f_t2f(1.0,  1.0,  1.0,  0.0 , 0.0 )
-	sgl.c3f(r, g, b)
-	sgl.v3f_t2f( 1.0, -1.0, -1.0, 0.0 , 0.25)
-	sgl.v3f_t2f( 1.0, -1.0,  1.0, 0.25, 0.25)
-	sgl.v3f_t2f(-1.0, -1.0,  1.0, 0.25, 0.0 )
-	sgl.v3f_t2f(-1.0, -1.0, -1.0, 0.0 , 0.0 )
-	sgl.c3f(r, g, b)
-	sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.0 , 0.25)
-	sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.25, 0.25)
-	sgl.v3f_t2f( 1.0,  1.0,  1.0,  0.25, 0.0 )
-	sgl.v3f_t2f( 1.0,  1.0, -1.0,  0.0 , 0.0 )
+	{
+		sgl.c3f(r, g, b) // edge color
+		// edge coord
+		// x,y,z, texture cord: u,v
+		// vfmt off
+		sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.0 , 0.25)
+		sgl.v3f_t2f( 1.0,  1.0, -1.0,  0.25, 0.25)
+		sgl.v3f_t2f( 1.0, -1.0, -1.0,  0.25, 0.0 )
+		sgl.v3f_t2f(-1.0, -1.0, -1.0,  0.0 , 0.0 )
+		sgl.c3f(r, g, b)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0,  0.0 , 0.25)
+		sgl.v3f_t2f( 1.0, -1.0,  1.0,  0.25, 0.25)
+		sgl.v3f_t2f( 1.0,  1.0,  1.0,  0.25, 0.0 )
+		sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.0 , 0.0 )
+		sgl.c3f(r, g, b)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0,  0.0 , 0.25)
+		sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.25, 0.25)
+		sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.25, 0.0 )
+		sgl.v3f_t2f(-1.0, -1.0, -1.0,  0.0 , 0.0 )
+		sgl.c3f(r, g, b)
+		sgl.v3f_t2f(1.0, -1.0,  1.0,  0.0 , 0.25)
+		sgl.v3f_t2f(1.0, -1.0, -1.0,  0.25, 0.25)
+		sgl.v3f_t2f(1.0,  1.0, -1.0,  0.25, 0.0 )
+		sgl.v3f_t2f(1.0,  1.0,  1.0,  0.0 , 0.0 )
+		sgl.c3f(r, g, b)
+		sgl.v3f_t2f( 1.0, -1.0, -1.0, 0.0 , 0.25)
+		sgl.v3f_t2f( 1.0, -1.0,  1.0, 0.25, 0.25)
+		sgl.v3f_t2f(-1.0, -1.0,  1.0, 0.25, 0.0 )
+		sgl.v3f_t2f(-1.0, -1.0, -1.0, 0.0 , 0.0 )
+		sgl.c3f(r, g, b)
+		sgl.v3f_t2f(-1.0,  1.0, -1.0,  0.0 , 0.25)
+		sgl.v3f_t2f(-1.0,  1.0,  1.0,  0.25, 0.25)
+		sgl.v3f_t2f( 1.0,  1.0,  1.0,  0.25, 0.0 )
+		sgl.v3f_t2f( 1.0,  1.0, -1.0,  0.0 , 0.0 )
+		// vfmt on
+	}
 	sgl.end()
 }
 
@@ -251,8 +238,8 @@ struct Vertex_t {
 	color u32
 	// u u16
 	// v u16
-	u     f32
-	v     f32
+	u f32
+	v f32
 }
 
 fn init_cube_glsl(mut app App) {
@@ -260,6 +247,7 @@ fn init_cube_glsl(mut app App) {
 	// d := u16(32767/8)       // for compatibility with D3D11, 32767 stand for 1
 	d := f32(1.0) // 0.05)
 	c := u32(0xFFFFFF_FF) // color RGBA8
+	// vfmt off
 	vertices := [
 		// Face 0
 		Vertex_t{-1.0, -1.0, -1.0, c,  0, 0},
@@ -292,69 +280,77 @@ fn init_cube_glsl(mut app App) {
 		Vertex_t{ 1.0,  1.0,  1.0, c,  d, d},
 		Vertex_t{ 1.0,  1.0, -1.0, c,  0, d},
 	]
+	// vfmt on
 
-	mut vert_buffer_desc := C.sg_buffer_desc{label: c'cube-vertices'}
-	unsafe { C.memset(&vert_buffer_desc, 0, sizeof(vert_buffer_desc)) }
+	mut vert_buffer_desc := gfx.BufferDesc{
+		label: c'cube-vertices'
+	}
+	unsafe { vmemset(&vert_buffer_desc, 0, int(sizeof(vert_buffer_desc))) }
 
-	vert_buffer_desc.size = size_t(vertices.len * int(sizeof(Vertex_t)))
-	vert_buffer_desc.data = C.sg_range{
-		ptr: vertices.data
-		size: size_t(vertices.len * int(sizeof(Vertex_t)))
+	vert_buffer_desc.size = usize(vertices.len * int(sizeof(Vertex_t)))
+	vert_buffer_desc.data = gfx.Range{
+		ptr:  vertices.data
+		size: usize(vertices.len * int(sizeof(Vertex_t)))
 	}
 
-	vert_buffer_desc.@type = .vertexbuffer
+	vert_buffer_desc.type = .vertexbuffer
 	// vert_buffer_desc.usage   = .immutable
 	vbuf := gfx.make_buffer(&vert_buffer_desc)
 
-	/* create an index buffer for the cube */
+	// create an index buffer for the cube
+	// vfmt off
 	indices := [
-		u16(0), 1, 2,  0, 2, 3,
-		6, 5, 4,       7, 6, 4,
-		8, 9, 10,      8, 10, 11,
-		14, 13, 12,    15, 14, 12,
-		16, 17, 18,    16, 18, 19,
-		22, 21, 20,    23, 22, 20
+		u16(0),  1,  2,    0,  2,  3,
+		    6,   5,  4,    7,  6,  4,
+		    8,   9, 10,    8, 10, 11,
+		    14, 13, 12,   15, 14, 12,
+		    16, 17, 18,   16, 18, 19,
+		    22, 21, 20,   23, 22, 20,
 	]
+	// vfmt on
 
-	mut index_buffer_desc := C.sg_buffer_desc{label: c'cube-indices'}
-	unsafe { C.memset(&index_buffer_desc, 0, sizeof(index_buffer_desc)) }
+	mut index_buffer_desc := gfx.BufferDesc{
+		label: c'cube-indices'
+	}
+	unsafe { vmemset(&index_buffer_desc, 0, int(sizeof(index_buffer_desc))) }
 
-	index_buffer_desc.size = size_t(indices.len * int(sizeof(u16)))
-	index_buffer_desc.data = C.sg_range{
-		ptr: indices.data
-		size: size_t(indices.len * int(sizeof(u16)))
+	index_buffer_desc.size = usize(indices.len * int(sizeof(u16)))
+	index_buffer_desc.data = gfx.Range{
+		ptr:  indices.data
+		size: usize(indices.len * int(sizeof(u16)))
 	}
 
-	index_buffer_desc.@type = .indexbuffer
+	index_buffer_desc.type = .indexbuffer
 	ibuf := gfx.make_buffer(&index_buffer_desc)
 
 	// create shader
-	shader := gfx.make_shader(C.cube_shader_desc(C.sg_query_backend()))
+	shader := gfx.make_shader(voidptr(C.cube_shader_desc(C.sg_query_backend())))
 
-	mut pipdesc := C.sg_pipeline_desc{}
-	unsafe { C.memset(&pipdesc, 0, sizeof(pipdesc)) }
+	mut pipdesc := gfx.PipelineDesc{}
+	unsafe { vmemset(&pipdesc, 0, int(sizeof(pipdesc))) }
 
 	pipdesc.layout.buffers[0].stride = int(sizeof(Vertex_t))
 	// the constants [C.ATTR_vs_pos, C.ATTR_vs_color0, C.ATTR_vs_texcoord0] are generated bysokol-shdc
-	pipdesc.layout.attrs[C.ATTR_vs_pos      ].format = .float3  // x,y,z as f32
-	pipdesc.layout.attrs[C.ATTR_vs_color0   ].format = .ubyte4n // color as u32
-	pipdesc.layout.attrs[C.ATTR_vs_texcoord0].format = .float2  // u,v as f32
+	pipdesc.layout.attrs[C.ATTR_vs_pos].format = .float3 // x,y,z as f32
+	pipdesc.layout.attrs[C.ATTR_vs_color0].format = .ubyte4n // color as u32
+	pipdesc.layout.attrs[C.ATTR_vs_texcoord0].format = .float2 // u,v as f32
 	// pipdesc.layout.attrs[C.ATTR_vs_texcoord0].format  = .short2n  // u,v as u16
 
 	pipdesc.shader = shader
 	pipdesc.index_type = .uint16
 
-	pipdesc.depth = C.sg_depth_state{
+	pipdesc.depth = gfx.DepthState{
 		write_enabled: true
-		compare: gfx.CompareFunc(C.SG_COMPAREFUNC_LESS_EQUAL)
+		compare:       .less_equal
 	}
 	pipdesc.cull_mode = .back
 
-	pipdesc.label = 'glsl_shader pipeline'.str
+	pipdesc.label = c'glsl_shader pipeline'
 
 	app.cube_bind.vertex_buffers[0] = vbuf
 	app.cube_bind.index_buffer = ibuf
-	app.cube_bind.fs_images[C.SLOT_tex] = app.texture
+	app.cube_bind.fs.images[C.SLOT_tex] = app.texture
+	app.cube_bind.fs.samplers[C.SLOT_smp] = app.sampler
 	app.cube_pip_glsl = gfx.make_pipeline(&pipdesc)
 	println('GLSL init DONE!')
 }
@@ -364,46 +360,59 @@ fn draw_cube_glsl(app App) {
 		return
 	}
 
-	rot := [f32(app.mouse_y), f32(app.mouse_x)]
-
+	// clear
 	ws := gg.window_size_real_pixels()
-	// ratio := f32(ws.width)/ws.height
-	dw := f32(ws.width / 2)
-	dh := f32(ws.height / 2)
-
-	tr_matrix := m4.calc_tr_matrices(dw, dh, rot[0], rot[1], 2.0)
-	gfx.apply_viewport(ws.width / 2, 0, ws.width / 2, ws.height / 2, true)
-
-	// apply the pipline and bindings
-	gfx.apply_pipeline(app.cube_pip_glsl)
-	gfx.apply_bindings(app.cube_bind)
-
-	//***************
-	// Uniforms
-	//***************
-	// passing the view matrix as uniform
-	// res is a 4x4 matrix of f32 thus: 4*16 byte of size
-	vs_uniforms_range := C.sg_range{
-		ptr: &tr_matrix
-		size: size_t(4 * 16)
+	mut color_action := gfx.ColorAttachmentAction{
+		load_action: unsafe { gfx.LoadAction(C.SG_LOADACTION_DONTCARE) } // C.SG_ACTION_CLEAR)
+		clear_value: gfx.Color{
+			r: 1.0
+			g: 1.0
+			b: 1.0
+			a: 1.0
+		}
 	}
-	gfx.apply_uniforms(C.SG_SHADERSTAGE_VS, C.SLOT_vs_params, &vs_uniforms_range)
+	mut pass_action := gfx.PassAction{}
+	pass_action.colors[0] = color_action
+	pass := sapp.create_default_pass(pass_action)
+	gfx.begin_pass(&pass)
+	{
+		rot := [f32(app.mouse_y), f32(app.mouse_x)]
+		// ratio := f32(ws.width)/ws.height
+		dw := f32(ws.width / 2)
+		dh := f32(ws.height / 2)
 
-	// fs uniforms
-	time_ticks := f32(time.ticks() - app.ticks) / 1000
-	mut text_res := [
-		f32(512),
-		512, /* x,y resolution to pass to FS */
-		time_ticks, /* time as f32 */
-		0 /* padding 4 Bytes == 1 f32 */,
-	]!
-	fs_uniforms_range := C.sg_range{
-		ptr: unsafe { &text_res }
-		size: size_t(4 * 4)
+		tr_matrix := m4.calc_tr_matrices(dw, dh, rot[0], rot[1], 2.0)
+		gfx.apply_viewport(ws.width / 2, 0, ws.width / 2, ws.height / 2, true)
+
+		// apply the pipeline and bindings
+		gfx.apply_pipeline(app.cube_pip_glsl)
+		gfx.apply_bindings(app.cube_bind)
+
+		// Uniforms:
+		// passing the view matrix as uniform
+		// res is a 4x4 matrix of f32 thus: 4*16 byte of size
+		vs_uniforms_range := gfx.Range{
+			ptr:  unsafe { &tr_matrix }
+			size: usize(4 * 16)
+		}
+		gfx.apply_uniforms(.vs, C.SLOT_vs_params, &vs_uniforms_range)
+
+		// fs uniforms
+		time_ticks := f32(time.ticks() - app.ticks) / 1000
+		mut text_res := [
+			f32(512),
+			512, // x,y resolution to pass to FS
+			time_ticks, // time as f32
+			0, // padding 4 Bytes == 1 f32
+		]!
+		fs_uniforms_range := gfx.Range{
+			ptr:  unsafe { &text_res }
+			size: usize(4 * 4)
+		}
+		gfx.apply_uniforms(.fs, C.SLOT_fs_params, &fs_uniforms_range)
+
+		gfx.draw(0, (3 * 2) * 6, 1)
 	}
-	gfx.apply_uniforms(C.SG_SHADERSTAGE_FS, C.SLOT_fs_params, &fs_uniforms_range)
-
-	gfx.draw(0, (3 * 2) * 6, 1)
 	gfx.end_pass()
 	gfx.commit()
 }
@@ -414,7 +423,7 @@ fn draw_texture_cubes(app App) {
 	sgl.load_pipeline(app.pip_3d)
 
 	sgl.enable_texture()
-	sgl.texture(app.texture)
+	sgl.texture(app.texture, app.sampler)
 
 	sgl.matrix_mode_projection()
 	sgl.perspective(sgl.rad(45.0), 1.0, 0.1, 100.0)
@@ -424,19 +433,26 @@ fn draw_texture_cubes(app App) {
 	sgl.rotate(sgl.rad(rot[0]), 1.0, 0.0, 0.0)
 	sgl.rotate(sgl.rad(rot[1]), 0.0, 1.0, 0.0)
 	cube_texture(1, 1, 1)
+
 	sgl.push_matrix()
+	{
 		sgl.translate(0.0, 0.0, 3.0)
 		sgl.scale(0.5, 0.5, 0.5)
 		sgl.rotate(-2.0 * sgl.rad(rot[0]), 1.0, 0.0, 0.0)
 		sgl.rotate(-2.0 * sgl.rad(rot[1]), 0.0, 1.0, 0.0)
-		cube_texture(1,1,1)
+		cube_texture(1, 1, 1)
 		sgl.push_matrix()
+		{
 			sgl.translate(0.0, 0.0, 3.0)
 			sgl.scale(0.5, 0.5, 0.5)
-			sgl.rotate(-3.0 * sgl.rad(2*rot[0]), 1.0, 0.0, 0.0)
-			sgl.rotate(3.0 * sgl.rad(2*rot[1]), 0.0, 0.0, 1.0)
-			cube_texture(1,1,1)
+			// vfmt off
+			sgl.rotate(-3.0 * sgl.rad(2 * rot[0]), 1.0, 0.0, 0.0)
+			sgl.rotate( 3.0 * sgl.rad(2 * rot[1]), 0.0, 0.0, 1.0)
+			// vfmt on
+			cube_texture(1, 1, 1)
+		}
 		sgl.pop_matrix()
+	}
 	sgl.pop_matrix()
 
 	sgl.disable_texture()
@@ -454,38 +470,23 @@ fn frame(mut app App) {
 	y0 := 0
 	y1 := int(f32(dh) * 0.5)
 
-	// app.gg.begin()
-
 	app.gg.begin()
-	sgl.defaults()
+	{
+		sgl.defaults()
 
-	// 2d triangle
-	sgl.viewport(x0, y0, ww, hh, true)
-	draw_triangle()
+		// 2d triangle
+		sgl.viewport(x0, y0, ww, hh, true)
+		draw_triangle()
 
-	// colored cubes with viewport
-	sgl.viewport(x0, y1, ww, hh, true)
-	draw_cubes(app)
+		// colored cubes with viewport
+		sgl.viewport(x0, y1, ww, hh, true)
+		draw_cubes(app)
 
-	// textured cubed with viewport
-	sgl.viewport(0, int(dh / 5), dw, int(dh * ratio), true)
-	draw_texture_cubes(app)
-
-	app.gg.end()
-
-	// clear
-	mut color_action := C.sg_color_attachment_action{
-		action: gfx.Action(C.SG_ACTION_DONTCARE) // C.SG_ACTION_CLEAR)
-		value: C.sg_color{
-			r: 1.0
-			g: 1.0
-			b: 1.0
-			a: 1.0
-		}
+		// textured cubed with viewport
+		sgl.viewport(0, int(dh / 5), dw, int(dh * ratio), true)
+		draw_texture_cubes(app)
 	}
-	mut pass_action := C.sg_pass_action{}
-	pass_action.colors[0] = color_action
-	gfx.begin_default_pass(&pass_action, ws.width, ws.height)
+	app.gg.end()
 
 	// glsl cube
 	draw_cube_glsl(app)
@@ -494,36 +495,34 @@ fn frame(mut app App) {
 }
 
 /******************************************************************************
-*
 * Init / Cleanup
-*
 ******************************************************************************/
 fn my_init(mut app App) {
 	// set max vertices,
 	// for a large number of the same type of object it is better use the instances!!
 	desc := sapp.create_desc()
 	gfx.setup(&desc)
-	sgl_desc := C.sgl_desc_t{
+	sgl_desc := sgl.Desc{
 		max_vertices: 50 * 65536
 	}
 	sgl.setup(&sgl_desc)
 
 	// 3d pipeline
-	mut pipdesc := C.sg_pipeline_desc{}
-	unsafe { C.memset(&pipdesc, 0, sizeof(pipdesc)) }
+	mut pipdesc := gfx.PipelineDesc{}
+	unsafe { vmemset(&pipdesc, 0, int(sizeof(pipdesc))) }
 
-	color_state := C.sg_color_state{
-		blend: C.sg_blend_state{
-			enabled: true
-			src_factor_rgb: gfx.BlendFactor(C.SG_BLENDFACTOR_SRC_ALPHA)
-			dst_factor_rgb: gfx.BlendFactor(C.SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA)
+	color_state := gfx.ColorTargetState{
+		blend: gfx.BlendState{
+			enabled:        true
+			src_factor_rgb: .src_alpha
+			dst_factor_rgb: .one_minus_src_alpha
 		}
 	}
 	pipdesc.colors[0] = color_state
 
-	pipdesc.depth = C.sg_depth_state{
+	pipdesc.depth = gfx.DepthState{
 		write_enabled: true
-		compare: gfx.CompareFunc(C.SG_COMPAREFUNC_LESS_EQUAL)
+		compare:       .less_equal
 	}
 	pipdesc.cull_mode = .back
 
@@ -541,28 +540,28 @@ fn my_init(mut app App) {
 			x := (i & 0xFF) >> 5 // 8 cell
 			// upper left corner
 			if x == 0 && y == 0 {
-				tmp_txt[i] = byte(0xFF)
-				tmp_txt[i + 1] = byte(0)
-				tmp_txt[i + 2] = byte(0)
-				tmp_txt[i + 3] = byte(0xFF)
+				tmp_txt[i] = u8(0xFF)
+				tmp_txt[i + 1] = u8(0)
+				tmp_txt[i + 2] = u8(0)
+				tmp_txt[i + 3] = u8(0xFF)
 			}
 			// low right corner
 			else if x == 7 && y == 7 {
-				tmp_txt[i + 0] = byte(0)
-				tmp_txt[i + 1] = byte(0xFF)
-				tmp_txt[i + 2] = byte(0)
-				tmp_txt[i + 3] = byte(0xFF)
+				tmp_txt[i + 0] = u8(0)
+				tmp_txt[i + 1] = u8(0xFF)
+				tmp_txt[i + 2] = u8(0)
+				tmp_txt[i + 3] = u8(0xFF)
 			} else {
 				col := if ((x + y) & 1) == 1 { 0xFF } else { 128 }
-				tmp_txt[i + 0] = byte(col)  // red
-				tmp_txt[i + 1] = byte(col)  // green
-				tmp_txt[i + 2] = byte(col)  // blue
-				tmp_txt[i + 3] = byte(0xFF) // alpha
+				tmp_txt[i + 0] = u8(col) // red
+				tmp_txt[i + 1] = u8(col) // green
+				tmp_txt[i + 2] = u8(col) // blue
+				tmp_txt[i + 3] = u8(0xFF) // alpha
 			}
 			i += 4
 		}
 	}
-	app.texture = create_texture(w, h, tmp_txt)
+	app.texture, app.sampler = create_texture(w, h, tmp_txt)
 	unsafe { free(tmp_txt) }
 
 	// glsl
@@ -570,14 +569,8 @@ fn my_init(mut app App) {
 	app.init_flag = true
 }
 
-fn cleanup(mut app App) {
-	gfx.shutdown()
-}
-
 /******************************************************************************
-*
 * event
-*
 ******************************************************************************/
 fn my_event_manager(mut ev gg.Event, mut app App) {
 	if ev.typ == .mouse_move {
@@ -593,33 +586,24 @@ fn my_event_manager(mut ev gg.Event, mut app App) {
 	}
 }
 
-/******************************************************************************
-*
-* Main
-*
-******************************************************************************/
-[console] // is needed for easier diagnostics on windows
 fn main() {
 	// App init
-	mut app := &App{
-		gg: 0
-	}
+	mut app := &App{}
 
 	mut a := [5]int{}
 	a[0] = 2
 	println(a)
 
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: '3D Cube Demo'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		init_fn: my_init
-		cleanup_fn: cleanup
-		event_fn: my_event_manager
+		window_title:  '3D Cube Demo'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		init_fn:       my_init
+		event_fn:      my_event_manager
 	)
 
 	app.ticks = time.ticks()

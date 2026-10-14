@@ -1,473 +1,33 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
-// Use of this source code is governed by an MIT license
-// that can be found in the LICENSE file.
 module util
 
 import os
-import time
 import v.pref
-import v.vmod
-import v.util.recompilation
+import strings
+import v.ansi
 
-// math.bits is needed by strconv.ftoa
-pub const (
-	builtin_module_parts = ['math.bits', 'strconv', 'strconv.ftoa', 'strings', 'builtin']
-	bundle_modules       = ['clipboard', 'fontstash', 'gg', 'gx', 'sokol', 'szip', 'ui']
-)
+const normalized_workdir = os.wd_at_startup.replace('\\', '/') + '/'
 
-pub const (
-	external_module_dependencies_for_tool = {
-		'vdoc': ['markdown']
-	}
-)
-
-const (
-	const_tabs = [
-		'',
-		'\t',
-		'\t\t',
-		'\t\t\t',
-		'\t\t\t\t',
-		'\t\t\t\t\t',
-		'\t\t\t\t\t\t',
-		'\t\t\t\t\t\t\t',
-		'\t\t\t\t\t\t\t\t',
-		'\t\t\t\t\t\t\t\t\t',
-	]
-)
-
-pub fn tabs(n int) string {
-	return if n < util.const_tabs.len { util.const_tabs[n] } else { '\t'.repeat(n) }
-}
-
-//
+// set_vroot_folder exposes the V executable and marks child tool processes.
 pub fn set_vroot_folder(vroot_path string) {
-	// Preparation for the compiler module:
-	// VEXE env variable is needed so that compiler.vexe_path()
-	// can return it later to whoever needs it:
-	vname := if os.user_os() == 'windows' { 'v.exe' } else { 'v' }
-	os.setenv('VEXE', os.real_path(os.join_path(vroot_path, vname)), true)
+	if os.getenv('VEXE') == '' {
+		vname := if os.user_os() == 'windows' { 'v.exe' } else { 'v' }
+		os.setenv('VEXE', os.real_path(os.join_path_single(vroot_path, vname)), true)
+	}
 	os.setenv('VCHILD', 'true', true)
 }
 
-pub fn resolve_vmodroot(str string, dir string) ?string {
-	mut mcache := vmod.get_cache()
-	vmod_file_location := mcache.get_by_folder(dir)
-	if vmod_file_location.vmod_file.len == 0 {
-		// There was no actual v.mod file found.
-		return error('To use @VMODROOT, you need to have a "v.mod" file in $dir, or in one of its parent folders.')
-	}
-	vmod_path := vmod_file_location.vmod_folder
-	return str.replace('@VMODROOT', os.real_path(vmod_path))
+// quote_path quotes a path for use in a shell command.
+pub fn quote_path(path string) string {
+	return os.quoted_path(path)
 }
 
-// resolve_env_value replaces all occurrences of `$env('ENV_VAR_NAME')`
-// in `str` with the value of the env variable `$ENV_VAR_NAME`.
-pub fn resolve_env_value(str string, check_for_presence bool) ?string {
-	env_ident := "\$env('"
-	at := str.index(env_ident) or {
-		return error('no "$env_ident' + '...\')" could be found in "$str".')
-	}
-	mut ch := byte(`.`)
-	mut env_lit := ''
-	for i := at + env_ident.len; i < str.len && ch != `)`; i++ {
-		ch = byte(str[i])
-		if ch.is_letter() || ch.is_digit() || ch == `_` {
-			env_lit += ch.ascii_str()
-		} else {
-			if !(ch == `'` || ch == `)`) {
-				if ch == `$` {
-					return error('cannot use string interpolation in compile time \$env() expression')
-				}
-				return error('invalid environment variable name in "$str", invalid character "$ch.ascii_str()"')
-			}
-		}
-	}
-	if env_lit == '' {
-		return error('supply an env variable name like HOME, PATH or USER')
-	}
-	mut env_value := ''
-	if check_for_presence {
-		env_value = os.environ()[env_lit] or {
-			return error('the environment variable "$env_lit" does not exist.')
-		}
-		if env_value == '' {
-			return error('the environment variable "$env_lit" is empty.')
-		}
-	} else {
-		env_value = os.getenv(env_lit)
-	}
-	rep := str.replace_once(env_ident + env_lit + "'" + ')', env_value)
-	if rep.contains(env_ident) {
-		return resolve_env_value(rep, check_for_presence)
-	}
-	return rep
-}
-
-// launch_tool - starts a V tool in a separate process, passing it the `args`.
-// All V tools are located in the cmd/tools folder, in files or folders prefixed by
-// the letter `v`, followed by the tool name, i.e. `cmd/tools/vdoc/` or `cmd/tools/vpm.v`.
-// The folder variant is suitable for larger and more complex tools, like `v doc`, because
-// it provides you the ability to split their source in separate .v files, organized by topic,
-// as well as have resources like static css/text/js files, that the tools can use.
-// launch_tool uses a timestamp based detection mechanism, so that after `v self`, each tool
-// will be recompiled too, before it is used, which guarantees that it would be up to date with
-// V itself. That mechanism can be disabled by package managers by creating/touching a small
-// `cmd/tools/.disable_autorecompilation` file, OR by changing the timestamps of all executables
-// in cmd/tools to be < 1024 seconds (in unix time).
-pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
-	vexe := pref.vexe_path()
-	vroot := os.dir(vexe)
-	set_vroot_folder(vroot)
-	tool_args := args_quote_paths(args)
-	tools_folder := os.join_path(vroot, 'cmd', 'tools')
-	tool_basename := os.real_path(os.join_path(tools_folder, tool_name))
-	mut tool_exe := ''
-	mut tool_source := ''
-	if os.is_dir(tool_basename) {
-		tool_exe = path_of_executable(os.join_path(tool_basename, tool_name))
-		tool_source = tool_basename
-	} else {
-		tool_exe = path_of_executable(tool_basename)
-		tool_source = tool_basename + '.v'
-	}
-	if is_verbose {
-		println('launch_tool vexe        : $vroot')
-		println('launch_tool vroot       : $vroot')
-		println('launch_tool tool_source : $tool_source')
-		println('launch_tool tool_exe    : $tool_exe')
-		println('launch_tool tool_args   : $tool_args')
-	}
-	disabling_file := recompilation.disabling_file(vroot)
-	is_recompilation_disabled := os.exists(disabling_file)
-	should_compile := !is_recompilation_disabled
-		&& should_recompile_tool(vexe, tool_source, tool_name, tool_exe)
-	if is_verbose {
-		println('launch_tool should_compile: $should_compile')
-	}
-	if should_compile {
-		emodules := util.external_module_dependencies_for_tool[tool_name]
-		for emodule in emodules {
-			check_module_is_installed(emodule, is_verbose) or { panic(err) }
-		}
-		mut compilation_command := '"$vexe" -skip-unused '
-		if tool_name in ['vself', 'vup', 'vdoctor', 'vsymlink'] {
-			// These tools will be called by users in cases where there
-			// is high chance of there being a problem somewhere. Thus
-			// it is better to always compile them with -g, so that in
-			// case these tools do crash/panic, their backtraces will have
-			// .v line numbers, to ease diagnostic in #bugs and issues.
-			compilation_command += ' -g '
-		}
-		compilation_command += '"$tool_source"'
-		if is_verbose {
-			println('Compiling $tool_name with: "$compilation_command"')
-		}
-		tool_compilation := os.execute_or_exit(compilation_command)
-		if tool_compilation.exit_code != 0 {
-			eprintln('cannot compile `$tool_source`: \n$tool_compilation.output')
-			exit(1)
-		}
-	}
-	$if windows {
-		exit(os.system('"$tool_exe" $tool_args'))
-	} $else {
-		os.execvp(tool_exe, args) or { panic(err) }
-	}
-}
-
-// NB: should_recompile_tool/4 compares unix timestamps that have 1 second resolution
-// That means that a tool can get recompiled twice, if called in short succession.
-// TODO: use a nanosecond mtime timestamp, if available.
-pub fn should_recompile_tool(vexe string, tool_source string, tool_name string, tool_exe string) bool {
-	if os.is_dir(tool_source) {
-		source_files := os.walk_ext(tool_source, '.v')
-		mut newest_sfile := ''
-		mut newest_sfile_mtime := 0
-		for sfile in source_files {
-			mtime := os.file_last_mod_unix(sfile)
-			if mtime > newest_sfile_mtime {
-				newest_sfile_mtime = mtime
-				newest_sfile = sfile
-			}
-		}
-		single_file_recompile := should_recompile_tool(vexe, newest_sfile, tool_name,
-			tool_exe)
-		// eprintln('>>> should_recompile_tool: tool_source: $tool_source | $single_file_recompile | $newest_sfile')
-		return single_file_recompile
-	}
-	// TODO Caching should be done on the `vlib/v` level.
-	mut should_compile := false
-	if !os.exists(tool_exe) {
-		should_compile = true
-	} else {
-		mtime_vexe := os.file_last_mod_unix(vexe)
-		mtime_tool_exe := os.file_last_mod_unix(tool_exe)
-		mtime_tool_source := os.file_last_mod_unix(tool_source)
-		if mtime_tool_exe <= mtime_vexe {
-			// v was recompiled, maybe after v up ...
-			// rebuild the tool too just in case
-			should_compile = true
-			if tool_name == 'vself' || tool_name == 'vup' {
-				// The purpose of vself/up is to update and recompile v itself.
-				// After the first 'v self' execution, v will be modified, so
-				// then a second 'v self' will detect, that v is newer than the
-				// vself executable, and try to recompile vself/up again, which
-				// will slow down the next v recompilation needlessly.
-				should_compile = false
-			}
-		}
-		if mtime_tool_exe <= mtime_tool_source {
-			// the user changed the source code of the tool, or git updated it:
-			should_compile = true
-		}
-		// GNU Guix and possibly other environments, have bit for bit reproducibility in mind,
-		// including filesystem attributes like modification times, so they set the modification
-		// times of executables to a small number like 0, 1 etc. In this case, we should not
-		// recompile even if other heuristics say that we should. Users in such environments,
-		// have to explicitly do: `v cmd/tools/vfmt.v`, and/or install v from source, and not
-		// use the system packaged one, if they desire to develop v itself.
-		if mtime_vexe < 1024 && mtime_tool_exe < 1024 {
-			should_compile = false
-		}
-	}
-	return should_compile
-}
-
-fn tool_source2name_and_exe(tool_source string) (string, string) {
-	sfolder := os.dir(tool_source)
-	tool_name := os.base(tool_source).replace('.v', '')
-	tool_exe := os.join_path(sfolder, path_of_executable(tool_name))
-	return tool_name, tool_exe
-}
-
-pub fn quote_path(s string) string {
-	mut qs := s
-	if qs.contains('&') {
-		qs = qs.replace('&', '\\&')
-	}
-	if qs.contains(' ') {
-		return '"$qs"'
-	}
-	return qs
-}
-
+// args_quote_paths quotes paths and joins them into a shell command fragment.
 pub fn args_quote_paths(args []string) string {
-	mut res := []string{}
-	for a in args {
-		res << quote_path(a)
-	}
-	return res.join(' ')
+	return args.map(os.quoted_path(it)).join(' ')
 }
 
-pub fn path_of_executable(path string) string {
-	$if windows {
-		return path + '.exe'
-	}
-	return path
-}
-
-pub fn read_file(file_path string) ?string {
-	raw_text := os.read_file(file_path) or { return error('failed to open $file_path') }
-	return skip_bom(raw_text)
-}
-
-pub fn skip_bom(file_content string) string {
-	mut raw_text := file_content
-	// BOM check
-	if raw_text.len >= 3 {
-		unsafe {
-			c_text := raw_text.str
-			if c_text[0] == 0xEF && c_text[1] == 0xBB && c_text[2] == 0xBF {
-				// skip three BOM bytes
-				offset_from_begin := 3
-				raw_text = tos(c_text[offset_from_begin], vstrlen(c_text) - offset_from_begin)
-			}
-		}
-	}
-	return raw_text
-}
-
-pub fn replace_op(s string) string {
-	return match s {
-		'+' { '_plus' }
-		'-' { '_minus' }
-		'*' { '_mult' }
-		'/' { '_div' }
-		'%' { '_mod' }
-		'<' { '_lt' }
-		'>' { '_gt' }
-		'==' { '_eq' }
-		else { '' }
-	}
-}
-
-pub fn join_env_vflags_and_os_args() []string {
-	vosargs := os.getenv('VOSARGS')
-	if vosargs != '' {
-		return non_empty(vosargs.split(' '))
-	}
-	mut args := []string{}
-	vflags := os.getenv('VFLAGS')
-	if vflags != '' {
-		args << os.args[0]
-		args << vflags.split(' ')
-		if os.args.len > 1 {
-			args << os.args[1..]
-		}
-		return non_empty(args)
-	}
-	return os.args
-}
-
-fn non_empty(arg []string) []string {
-	return arg.filter(it != '')
-}
-
-pub fn check_module_is_installed(modulename string, is_verbose bool) ?bool {
-	mpath := os.join_path(os.vmodules_dir(), modulename)
-	mod_v_file := os.join_path(mpath, 'v.mod')
-	murl := 'https://github.com/vlang/$modulename'
-	if is_verbose {
-		eprintln('check_module_is_installed: mpath: $mpath')
-		eprintln('check_module_is_installed: mod_v_file: $mod_v_file')
-		eprintln('check_module_is_installed: murl: $murl')
-	}
-	if os.exists(mod_v_file) {
-		vexe := pref.vexe_path()
-		update_cmd := '"$vexe" update "$modulename"'
-		if is_verbose {
-			eprintln('check_module_is_installed: updating with $update_cmd ...')
-		}
-		update_res := os.execute(update_cmd)
-		if update_res.exit_code < 0 {
-			return error('can not start $update_cmd, error: $update_res.output')
-		}
-		if update_res.exit_code != 0 {
-			eprintln('Warning: `$modulename` exists, but is not updated.
-V will continue, since updates can fail due to temporary network problems,
-and the existing module `$modulename` may still work.')
-			if is_verbose {
-				eprintln('Details:')
-				eprintln(update_res.output)
-			}
-			eprintln('-'.repeat(50))
-		}
-		return true
-	}
-	if is_verbose {
-		eprintln('check_module_is_installed: cloning from $murl ...')
-	}
-	cloning_res := os.execute('git clone $murl $mpath')
-	if cloning_res.exit_code < 0 {
-		return error_with_code('git is not installed, error: $cloning_res.output', cloning_res.exit_code)
-	}
-	if cloning_res.exit_code != 0 {
-		return error_with_code('cloning failed, details: $cloning_res.output', cloning_res.exit_code)
-	}
-	if !os.exists(mod_v_file) {
-		return error('even after cloning, $mod_v_file is still missing')
-	}
-	if is_verbose {
-		eprintln('check_module_is_installed: done')
-	}
-	return true
-}
-
-pub fn ensure_modules_for_all_tools_are_installed(is_verbose bool) {
-	for tool_name, tool_modules in util.external_module_dependencies_for_tool {
-		if is_verbose {
-			eprintln('Installing modules for tool: $tool_name ...')
-		}
-		for emodule in tool_modules {
-			check_module_is_installed(emodule, is_verbose) or { panic(err) }
-		}
-	}
-}
-
-pub fn strip_mod_name(name string) string {
-	return name.all_after_last('.')
-}
-
-pub fn strip_main_name(name string) string {
-	return name.replace('main.', '')
-}
-
-pub fn no_dots(s string) string {
-	return s.replace('.', '__')
-}
-
-const (
-	map_prefix = 'map[string]'
-)
-
-// no_cur_mod - removes cur_mod. prefix from typename,
-// but *only* when it is at the start, i.e.:
-// no_cur_mod('vproto.Abdcdef', 'proto') == 'vproto.Abdcdef'
-// even though proto. is a substring
-pub fn no_cur_mod(typename string, cur_mod string) string {
-	mut res := typename
-	mod_prefix := cur_mod + '.'
-	has_map_prefix := res.starts_with(util.map_prefix)
-	if has_map_prefix {
-		res = res.replace_once(util.map_prefix, '')
-	}
-	no_symbols := res.trim_left('&[]')
-	should_shorten := no_symbols.starts_with(mod_prefix)
-	if should_shorten {
-		res = res.replace_once(mod_prefix, '')
-	}
-	if has_map_prefix {
-		res = util.map_prefix + res
-	}
-	return res
-}
-
-pub fn prepare_tool_when_needed(source_name string) {
-	vexe := os.getenv('VEXE')
-	vroot := os.dir(vexe)
-	stool := os.join_path(vroot, 'cmd', 'tools', source_name)
-	tool_name, tool_exe := tool_source2name_and_exe(stool)
-	if should_recompile_tool(vexe, stool, tool_name, tool_exe) {
-		time.sleep(1001 * time.millisecond) // TODO: remove this when we can get mtime with a better resolution
-		recompile_file(vexe, stool)
-	}
-}
-
-pub fn recompile_file(vexe string, file string) {
-	cmd := '$vexe $file'
-	$if trace_recompilation ? {
-		println('recompilation command: $cmd')
-	}
-	recompile_result := os.system(cmd)
-	if recompile_result != 0 {
-		eprintln('could not recompile $file')
-		exit(2)
-	}
-}
-
-pub fn get_vtmp_folder() string {
-	mut vtmp := os.getenv('VTMP')
-	if vtmp.len > 0 {
-		return vtmp
-	}
-	vtmp = os.join_path(os.temp_dir(), 'v')
-	if !os.exists(vtmp) || !os.is_dir(vtmp) {
-		os.mkdir_all(vtmp) or { panic(err) }
-	}
-	os.setenv('VTMP', vtmp, true)
-	return vtmp
-}
-
-pub fn should_bundle_module(mod string) bool {
-	return mod in util.bundle_modules
-		|| (mod.contains('.') && mod.all_before('.') in util.bundle_modules)
-}
-
-// find_all_v_files - given a list of files/folders, finds all .v/.vsh files
-// if some of the files/folders on the list does not exist, or a file is not
-// a .v or .vsh file, returns an error instead.
-pub fn find_all_v_files(roots []string) ?[]string {
+// find_all_v_files resolves V files below the supplied files and directories.
+pub fn find_all_v_files(roots []string) ![]string {
 	mut files := []string{}
 	for file in roots {
 		if os.is_dir(file) {
@@ -476,12 +36,323 @@ pub fn find_all_v_files(roots []string) ?[]string {
 			continue
 		}
 		if !file.ends_with('.v') && !file.ends_with('.vv') && !file.ends_with('.vsh') {
-			return error('v fmt can only be used on .v files.\nOffending file: "$file"')
+			return error('v fmt can only be used on .v files.\nOffending file: "${file}"')
 		}
 		if !os.exists(file) {
-			return error('"$file" does not exist')
+			return error('"${file}" does not exist')
 		}
 		files << file
 	}
 	return files
+}
+
+// path_styled_for_error_messages returns a stable path for diagnostics.
+pub fn path_styled_for_error_messages(path string) string {
+	mut real_path := os.real_path(path).replace('\\', '/')
+	if os.getenv('VERROR_PATHS') != 'absolute' && real_path.starts_with(normalized_workdir) {
+		real_path = real_path[normalized_workdir.len..]
+	}
+	return real_path
+}
+
+// verror prints a tool error and exits.
+@[noreturn]
+pub fn verror(kind string, message string) {
+	eprintln('${kind}: ${message}')
+	exit(1)
+}
+
+// is_escape_sequence reports whether c is a valid escape sequence denoter.
+@[inline]
+pub fn is_escape_sequence(c u8) bool {
+	return c in [`x`, `u`, `e`, `n`, `r`, `t`, `v`, `a`, `f`, `b`, `\\`, `\``, `$`, `@`, `?`, `{`,
+		`}`, `'`, `"`, `U`]
+}
+
+// contains_capital reports whether s contains an uppercase character.
+pub fn contains_capital(s string) bool {
+	for c in s {
+		if c.is_capital() {
+			return true
+		}
+	}
+	return false
+}
+
+// tokenize_c_flag splits a C flag on unquoted whitespace while preserving quotes.
+pub fn tokenize_c_flag(value string) []string {
+	mut tokens := []string{}
+	mut start := -1
+	mut quote := u8(0)
+	mut escaped := false
+	for i, c in value.bytes() {
+		if start < 0 {
+			if c.is_space() {
+				continue
+			}
+			start = i
+		}
+		if escaped {
+			escaped = false
+			continue
+		}
+		if c == `\\` {
+			escaped = true
+			continue
+		}
+		if quote != 0 {
+			if c == quote {
+				quote = 0
+			}
+			continue
+		}
+		if c in [`'`, `"`] {
+			quote = c
+			continue
+		}
+		if c.is_space() {
+			tokens << value[start..i]
+			start = -1
+		}
+	}
+	if start >= 0 {
+		tokens << value[start..]
+	}
+	return tokens
+}
+
+// nearest_vmod_root returns the closest directory containing a v.mod for path.
+pub fn nearest_vmod_root(path string) ?string {
+	mut dir := if path.len == 0 {
+		os.getwd()
+	} else if os.is_dir(path) {
+		path
+	} else {
+		os.dir(path)
+	}
+	if dir.len == 0 {
+		dir = os.getwd()
+	}
+	dir = os.real_path(dir)
+	for dir.len > 0 {
+		if os.is_file(os.join_path_single(dir, 'v.mod')) {
+			return dir
+		}
+		// A checkout or an explicit `.v.mod.stop` marker is the edge of a project:
+		// a `v.mod` above it belongs to something else (an unrelated project that
+		// happens to contain this one, or the shared temp directory tests run in),
+		// and must not become this project's root.
+		if is_project_boundary_dir(dir) {
+			return none
+		}
+		// `os.dir` answers `.` for a bare Windows drive (`os.dir('S:') == '.'`),
+		// which would continue the walk against the current directory and report
+		// an unrelated project root. `os.parent_dir` stops at the root instead.
+		dir = os.parent_dir(dir)
+	}
+	return none
+}
+
+// project_boundary_markers are the entries that mark a directory as the root of
+// a checkout or, with pref.module_search_stop_marker, as an explicit end of the
+// module search. The `v.mod` lookup stops here, so an unrelated project above
+// the boundary is never mistaken for the one being compiled. Only the explicit
+// marker also ends the search for modules in the directories above it (see
+// pref.is_module_search_stop_dir): a checkout marker does not, because a project
+// may be built against a module checked out next to it.
+pub const project_boundary_markers = ['.git', '.hg', '.svn', pref.module_search_stop_marker]
+
+// is_project_boundary_dir reports whether `dir` carries one of the
+// project_boundary_markers (a `.git` file counts too: git worktrees use one).
+pub fn is_project_boundary_dir(dir string) bool {
+	return project_boundary_markers.any(os.exists(os.join_path_single(dir, it)))
+}
+
+fn git_reference_root(git_dir string) !string {
+	common_dir_file := os.join_path(git_dir, 'commondir')
+	if !os.is_file(common_dir_file) {
+		return git_dir
+	}
+	common_dir := os.read_file(common_dir_file) or {
+		return error('failed to read `${common_dir_file}`')
+	}
+	configured := common_dir.trim_space()
+	return os.real_path(if os.is_abs_path(configured) {
+		configured
+	} else {
+		os.join_path(git_dir, configured)
+	})
+}
+
+fn read_git_reference(git_dir string, reference_root string, reference string) !string {
+	mut revision_path := os.join_path(git_dir, reference)
+	if !os.is_file(revision_path) && reference_root != git_dir {
+		revision_path = os.join_path(reference_root, reference)
+	}
+	if os.is_file(revision_path) {
+		return os.read_file(revision_path) or {
+			error('failed to read revision file `${revision_path}`')
+		}
+	}
+	packed_refs_file := os.join_path(reference_root, 'packed-refs')
+	packed_refs := os.read_file(packed_refs_file) or {
+		return error('failed to find revision file `${revision_path}`')
+	}
+	for line in packed_refs.split_into_lines() {
+		fields := line.fields()
+		if fields.len == 2 && fields[1] == reference {
+			return fields[0]
+		}
+	}
+	return error('failed to find revision `${reference}` in `${packed_refs_file}`')
+}
+
+// githash returns the current seven-character Git commit hash for path.
+pub fn githash(path string) !string {
+	git_marker := os.join_path(path, '.git')
+	mut git_dir := git_marker
+	if os.is_file(git_marker) {
+		marker := os.read_file(git_marker) or { return error('failed to read `${git_marker}`') }
+		if !marker.starts_with('gitdir: ') {
+			return error('invalid Git worktree marker `${git_marker}`')
+		}
+		configured := marker.all_after('gitdir: ').trim_space()
+		git_dir = os.real_path(if os.is_abs_path(configured) {
+			configured
+		} else {
+			os.join_path(path, configured)
+		})
+	}
+	head_file := os.join_path(git_dir, 'HEAD')
+	if !os.exists(head_file) {
+		return error('failed to find `${head_file}`')
+	}
+	mut hash := os.read_file(head_file) or { return error('failed to read `${head_file}`') }
+	if hash.starts_with('ref: ') {
+		reference_root := git_reference_root(git_dir)!
+		mut visited := map[string]bool{}
+		for hash.starts_with('ref: ') {
+			reference := hash[5..].trim_space()
+			if reference == '' {
+				return error('invalid empty Git symbolic reference')
+			}
+			if reference in visited {
+				return error('cyclic Git symbolic reference `${reference}`')
+			}
+			visited[reference] = true
+			hash = read_git_reference(git_dir, reference_root, reference)!
+		}
+	}
+	hash = hash.trim_space()
+	return hash[..7] or { error('failed to limit hash `${hash}` to 7 characters') }
+}
+
+struct Possibility {
+	value  string
+	svalue string
+mut:
+	similarity f32
+}
+
+// CalculateSuggestionSimilarityFN compares two suggestion candidates.
+pub type CalculateSuggestionSimilarityFN = fn (s1 string, s2 string) f32
+
+struct Suggestion {
+mut:
+	known                []Possibility
+	wanted               string
+	swanted              string
+	similarity_threshold f32
+	similarity_fn        CalculateSuggestionSimilarityFN = strings.dice_coefficient
+}
+
+// SuggestionParams configures new_suggestion.
+@[params]
+pub struct SuggestionParams {
+pub mut:
+	similarity_threshold f32 = 0.5
+	similarity_fn        CalculateSuggestionSimilarityFN = strings.dice_coefficient
+}
+
+// new_suggestion creates a diagnostic suggestion from wanted and possibilities.
+pub fn new_suggestion(wanted string, possibilities []string, params SuggestionParams) Suggestion {
+	mut suggestion := Suggestion{
+		known:                []Possibility{cap: int(max_suggestions_limit)}
+		wanted:               wanted
+		swanted:              short_module_name(wanted)
+		similarity_threshold: params.similarity_threshold
+		similarity_fn:        params.similarity_fn
+	}
+	suggestion.add_many(possibilities)
+	suggestion.sort()
+	return suggestion
+}
+
+const max_suggestions_limit = $d('max_suggestions_limit', 200)
+
+fn (mut s Suggestion) add(value string) {
+	if s.known.len >= max_suggestions_limit || value in [s.wanted, s.swanted] {
+		return
+	}
+	short_value := short_module_name(value)
+	if short_value in [s.wanted, s.swanted] {
+		return
+	}
+	similarity := f32(int(s.similarity_fn(s.swanted, short_value) * 1000)) / 1000
+	s.known << Possibility{
+		value:      value
+		svalue:     short_value
+		similarity: similarity
+	}
+}
+
+fn (mut s Suggestion) add_many(values []string) {
+	for value in values {
+		if s.known.len >= max_suggestions_limit {
+			break
+		}
+		s.add(value)
+	}
+}
+
+fn (mut s Suggestion) sort() {
+	s.known.sort(a.similarity < b.similarity)
+}
+
+// say appends the best suggestion, or a short possibility list, to message.
+pub fn (s Suggestion) say(message string) string {
+	mut result := message
+	mut found := false
+	if s.known.len > 0 {
+		top := s.known.last()
+		if top.similarity > s.similarity_threshold && !top.value.starts_with('[]') {
+			result += '.\nDid you mean `${highlight_suggestion(top.value)}`?'
+			found = true
+		}
+	}
+	if !found && s.known.len > 0 {
+		mut values := s.known.map('`${highlight_suggestion(it.svalue)}`')
+		values.sort()
+		if values.len == 1 {
+			result += '.\n1 possibility: ${values[0]}.'
+		} else if values.len < 25 {
+			result += '.\n${values.len} possibilities: ' + values.join(', ') + '.'
+		}
+	}
+	return result
+}
+
+fn short_module_name(name string) string {
+	if !name.contains('.') {
+		return name
+	}
+	values := name.split('.')
+	if values.len < 2 {
+		return name
+	}
+	return '${values[values.len - 2]}.${values.last()}'
+}
+
+fn highlight_suggestion(message string) string {
+	return ansi.bright_blue_stderr(message)
 }

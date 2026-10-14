@@ -1,15 +1,13 @@
 import term.ui as tui
 
-const (
-	colors = [
-		tui.Color{33, 150, 243},
-		tui.Color{0, 150, 136},
-		tui.Color{205, 220, 57},
-		tui.Color{255, 152, 0},
-		tui.Color{244, 67, 54},
-		tui.Color{156, 39, 176},
-	]
-)
+const colors = [
+	tui.Color{33, 150, 243},
+	tui.Color{0, 150, 136},
+	tui.Color{205, 220, 57},
+	tui.Color{255, 152, 0},
+	tui.Color{244, 67, 54},
+	tui.Color{156, 39, 176},
+]
 
 struct Point {
 	x int
@@ -18,16 +16,14 @@ struct Point {
 
 struct App {
 mut:
-	tui       &tui.Context = 0
+	tui       &tui.Context = unsafe { nil }
 	points    []Point
 	color     tui.Color = colors[0]
 	color_idx int
 	cut_rate  f64 = 5
 }
 
-fn frame(x voidptr) {
-	mut app := &App(x)
-
+fn frame(mut app App) {
 	app.tui.clear()
 
 	if app.points.len > 0 {
@@ -55,9 +51,7 @@ fn frame(x voidptr) {
 	app.tui.flush()
 }
 
-fn event(e &tui.Event, x voidptr) {
-	mut app := &App(x)
-
+fn event(e &tui.Event, mut app App) {
 	match e.typ {
 		.key_down {
 			match e.code {
@@ -88,13 +82,21 @@ fn event(e &tui.Event, x voidptr) {
 	}
 }
 
+type EventFn = fn (&tui.Event, voidptr)
+
+type FrameFn = fn (voidptr)
+
 fn main() {
 	mut app := &App{}
 	app.tui = tui.init(
-		user_data: app
-		frame_fn: frame
-		event_fn: event
+		user_data:   app
+		// The tui callback slots are `voidptr`; `frame`/`event` instead take the typed app
+		// pointer that `user_data` hands back. `&T` and `voidptr` share a representation, so
+		// reinterpreting the fn pointer across that parameter is ABI-safe; the cast only
+		// satisfies the static fn-type check.
+		frame_fn:    unsafe { FrameFn(frame) }
+		event_fn:    unsafe { EventFn(event) }
 		hide_cursor: true
 	)
-	app.tui.run() ?
+	app.tui.run()!
 }

@@ -53,7 +53,7 @@ fn test_float_to_str() {
 		1e23,
 		f32_from_bits1(0x0080_0000), // smallest float32
 		math.max_f32,
-		383260575764816448.,
+		383260575764816448.0,
 	]
 
 	exp_result_f32 := [
@@ -63,17 +63,17 @@ fn test_float_to_str() {
 		'nan',
 		'+inf',
 		'-inf',
-		'1.e+00',
-		'-1.e+00',
-		'1.e+01',
-		'-1.e+01',
-		'3.e-01',
-		'-3.e-01',
-		'1.e+06',
+		'1e+00',
+		'-1e+00',
+		'1e+01',
+		'-1e+01',
+		'3e-01',
+		'-3e-01',
+		'1e+06',
 		'1.234567e+05',
 		'1.23e+37',
 		'-1.2345e+02',
-		'1.e+23',
+		'1e+23',
 		'1.1754944e-38', // aprox from 1.1754943508 × 10−38,
 		'3.4028235e+38',
 		'3.8326058e+17',
@@ -115,33 +115,33 @@ fn test_float_to_str() {
 		'nan',
 		'+inf',
 		'-inf',
-		'1.e+00',
-		'-1.e+00',
-		'1.e+01',
-		'-1.e+01',
-		'3.e-01',
-		'-3.e-01',
-		'1.e+06',
+		'1e+00',
+		'-1e+00',
+		'1e+01',
+		'-1e+01',
+		'3e-01',
+		'-3e-01',
+		'1e+06',
 		'1.234567e+05',
 		'1.23e+47',
 		'-1.2345e+02',
-		'1.e+23',
+		'1e+23',
 		'2.2250738585072014e-308',
 		'3.4028234663852886e+38',
 		'3.8326057576481645e+17',
 		'3.8326057576481645e+17',
 		'1.23e+302', // this test is failed from C sprintf!!
 		'1.23e-298',
-		'5.e-324',
-		'-5.e-324',
+		'5e-324',
+		'-5e-324',
 	]
 
 	// test f32
 	for c, x in test_cases_f32 {
-		println(x)
+		// println(x)
 		s := strconv.f32_to_str(x, 8)
 		s1 := exp_result_f32[c]
-		// println("$s1 $s")
+		// println("${s1} ${s}")
 		assert s == s1
 	}
 
@@ -149,15 +149,18 @@ fn test_float_to_str() {
 	for c, x in test_cases_f64 {
 		s := strconv.f64_to_str(x, 17)
 		s1 := exp_result_f64[c]
-		// println("$s1 $s")
+		// println("${s1} ${s}")
 		assert s == s1
 	}
 
 	// test long format
-	for exp := 1; exp < 120; exp++ {
+	assert strconv.f64_to_str_l('1e1'.f64()).len == 4 // '10.0'
+	assert strconv.f64_to_str_l('1e-1'.f64()).len == 3 // '0.1'
+
+	for exp := 2; exp < 120; exp++ {
 		a := strconv.f64_to_str_l(('1e' + exp.str()).f64())
 		// println(a)
-		assert a.len == exp + 1
+		assert a.len == exp + 3
 
 		b := strconv.f64_to_str_l(('1e-' + exp.str()).f64())
 		// println(b)
@@ -168,4 +171,36 @@ fn test_float_to_str() {
 	// println( ftoa.f64_to_str(0.3456789123456, 4) )
 	// assert ftoa.f64_to_str(0.3456789123456, 4)=="3.4568e-01"
 	// assert ftoa.f32_to_str(0.345678, 3)=="3.457e-01"
+}
+
+fn test_issue_25141_1() {
+	assert strconv.ftoa_long_32(0.1234567901) == '0.12345679'
+}
+
+fn test_issue_25141_2() {
+	assert strconv.f32_to_str_l(math.f32_from_bits(1055100472)) == '0.44444442'
+}
+
+fn test_issue_25141_3() {
+	assert strconv.f32_to_str_l(math.f32_from_bits(1055100473)) == '0.44444445'
+}
+
+fn test_issue_25141_4() {
+	assert strconv.f32_to_str_l(math.f32_from_bits(1055100474)) == '0.44444448'
+}
+
+fn test_issue_25141_5() {
+	assert strconv.f32_to_str_l(math.f32_from_bits(1055100475)) == '0.4444445'
+}
+
+fn test_issue_25141_0001() {
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267991)) == '0.0001'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267992)) == '0.000100000005'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267993)) == '0.00010000001'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267994)) == '0.00010000002'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267995)) == '0.00010000003'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267996)) == '0.000100000034'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267997)) == '0.00010000004'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267998)) == '0.00010000005'
+	assert strconv.f32_to_str_l(math.f32_from_bits(953267999)) == '0.000100000056'
 }

@@ -1,828 +1,1710 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
-// Use of this source code is governed by an MIT license
-// that can be found in the LICENSE file.
 module pref
 
-// import v.ast // TODO this results in a compiler bug
-import os.cmdline
 import os
-import v.vcache
-import rand
+import strings
+import time
+import v.cmdexec
 
-pub enum BuildMode {
-	// `v program.v'
-	// Build user code only, and add pre-compiled vlib (`cc program.o builtin.o os.o...`)
-	default_mode // `v -lib ~/v/os`
-	// build any module (generate os.o + os.vh)
-	build_module
-}
+// native_backend_replacement_message explains how to replace the removed native backend option.
+pub const native_backend_replacement_message = '`-b native` has been replaced by `-b arm64` for native ARM64 compilation on macOS.\n' +
+	'Enable ARM64 support with `v -compile-backend arm64 self`, then use `v -b arm64 -gc none file.v`.\n' +
+	'The native AMD64 backend is not available yet; use `v -b c -arch amd64 file.v`.'
 
-pub enum AssertFailureMode {
-	default
-	aborts
-	backtraces
-}
+const macos_v3_caller_vexe_env = 'V_MACOS_V3_CALLER_VEXE'
+const macos_v3_caller_vexe_present_env = 'V_MACOS_V3_CALLER_VEXE_PRESENT'
+const macos_v3_caller_vchild_env = 'V_MACOS_V3_CALLER_VCHILD'
+const macos_v3_caller_vchild_present_env = 'V_MACOS_V3_CALLER_VCHILD_PRESENT'
+const macos_v3_caller_no_fallback_env = 'V_MACOS_V3_CALLER_NO_FALLBACK'
+const macos_v3_caller_no_fallback_present_env = 'V_MACOS_V3_CALLER_NO_FALLBACK_PRESENT'
+const macos_v3_private_environment_names = [
+	'V_MACOS_V3_FALLBACK_FILE',
+	'V_MACOS_V3_C_ERROR_DIR',
+	'V_MACOS_V3_SOURCE_MANIFEST',
+	'V_MACOS_V3_VHASH',
+	'V_MACOS_V3_VCURRENT_HASH',
+	'V_MACOS_V3_EMBEDDED',
+	'V_MACOS_V3_RETRY',
+	'V3_CRUN_BUILD_IDENTITY',
+	'V3_INTERNAL_RESTART',
+	'V3_INTERNAL_CACHE_RECOVERY',
+	macos_v3_caller_vexe_env,
+	macos_v3_caller_vexe_present_env,
+	macos_v3_caller_vchild_env,
+	macos_v3_caller_vchild_present_env,
+	macos_v3_caller_no_fallback_env,
+	macos_v3_caller_no_fallback_present_env,
+]
 
-pub enum GarbageCollectionMode {
-	no_gc
-	boehm_full // full garbage collection mode
-	boehm_incr // incremental garbage colletion mode
-	boehm_full_opt // full garbage collection mode
-	boehm_incr_opt // incremental garbage colletion mode
-	boehm_leak // leak detection mode (makes `gc_check_leaks()` work)
-}
-
-pub enum OutputMode {
-	stdout
-	silent
-}
-
-pub enum ColorOutput {
+// Subsystem selects the Windows executable subsystem.
+pub enum Subsystem {
 	auto
-	always
-	never
+	console
+	windows
 }
 
-pub enum Backend {
-	c // The (default) C backend
-	js_node // The JavaScript NodeJS backend
-	js_browser // The JavaScript browser backend
-	js_freestanding // The JavaScript freestanding backend
-	native // The Native backend
-}
-
-pub fn (b Backend) is_js() bool {
-	match b {
-		.js_node, .js_browser, .js_freestanding {
-			return true
-		}
-		else {
-			return false
-		}
-	}
-}
-
-pub enum CompilerType {
-	gcc
-	tinyc
-	clang
-	mingw
-	msvc
-	cplusplus
-}
-
-pub enum Arch {
-	_auto
-	amd64 // aka x86_64
-	arm64 // 64-bit arm
-	arm32 // 32-bit arm
-	rv64 // 64-bit risc-v
-	rv32 // 32-bit risc-v
-	i386
-	_max
-}
-
-const (
-	list_of_flags_with_param = ['o', 'd', 'define', 'b', 'backend', 'cc', 'os', 'target-os', 'cf',
-		'cflags', 'path', 'arch']
-)
-
-[heap]
+// Preferences represents preferences data used by pref.
 pub struct Preferences {
 pub mut:
-	os          OS // the OS to compile for
-	backend     Backend
-	build_mode  BuildMode
-	arch        Arch
-	output_mode OutputMode = .stdout
-	// verbosity           VerboseLevel
-	is_verbose bool
-	// nofmt            bool   // disable vfmt
-	is_test           bool   // `v test string_test.v`
-	is_script         bool   // single file mode (`v program.v`), main function can be skipped
-	is_vsh            bool   // v script (`file.vsh`) file, the `os` module should be made global
-	is_livemain       bool   // main program that contains live/hot code
-	is_liveshared     bool   // a shared library, that will be used in a -live main program
-	is_shared         bool   // an ordinary shared library, -shared, no matter if it is live or not
-	is_prof           bool   // benchmark every function
-	profile_file      string // the profile results will be stored inside profile_file
-	profile_no_inline bool   // when true, [inline] functions would not be profiled
-	translated        bool   // `v translate doom.v` are we running V code translated from C? allow globals, ++ expressions, etc
-	is_prod           bool   // use "-O2"
-	obfuscate         bool   // `v -obf program.v`, renames functions to "f_XXX"
-	is_repl           bool
-	is_run            bool
-	is_debug          bool // turned on by -g or -cg, it tells v to pass -g to the C backend compiler.
-	is_vlines         bool // turned on by -g (it slows down .tmp.c generation slightly).
-	// NB: passing -cg instead of -g will set is_vlines to false and is_debug to true, thus making v generate cleaner C files,
-	// which are sometimes easier to debug / inspect manually than the .tmp.c files by plain -g (when/if v line number generation breaks).
-	sanitize               bool   // use Clang's new "-fsanitize" option
-	sourcemap              bool   // JS Backend: -sourcemap will create a source map - default false
-	sourcemap_inline       bool = true // JS Backend: -sourcemap-inline will embed the source map in the generated JaaScript file -  currently default true only implemented
-	sourcemap_src_included bool   // JS Backend: -sourcemap-src-included includes V source code in source map -  default false
-	show_cc                bool   // -showcc, print cc command
-	show_c_output          bool   // -show-c-output, print all cc output even if the code was compiled correctly
-	show_callgraph         bool   // -show-callgraph, print the program callgraph, in a Graphviz DOT format to stdout
-	show_depgraph          bool   // -show-depgraph, print the program module dependency graph, in a Graphviz DOT format to stdout
-	dump_c_flags           string // `-dump-c-flags file.txt` - let V store all C flags, passed to the backend C compiler in `file.txt`, one C flag/value per line.
-	use_cache              bool   // when set, use cached modules to speed up subsequent compilations, at the cost of slower initial ones (while the modules are cached)
-	retry_compilation      bool = true // retry the compilation with another C compiler, if tcc fails.
-	is_stats               bool   // `v -stats file_test.v` will produce more detailed statistics for the tests that were run
-	// TODO Convert this into a []string
-	cflags string // Additional options which will be passed to the C compiler.
-	// For example, passing -cflags -Os will cause the C compiler to optimize the generated binaries for size.
-	// You could pass several -cflags XXX arguments. They will be merged with each other.
-	// You can also quote several options at the same time: -cflags '-Os -fno-inline-small-functions'.
-	m64                bool         // true = generate 64-bit code, defaults to x64
-	ccompiler          string       // the name of the C compiler used
-	ccompiler_type     CompilerType // the type of the C compiler used
-	third_party_option string
-	building_v         bool
-	autofree           bool // `v -manualfree` => false, `v -autofree` => true; false by default for now.
-	// Disabling `free()` insertion results in better performance in some applications (e.g. compilers)
-	compress bool // when set, use `upx` to compress the generated executable
-	// skip_builtin     bool   // Skips re-compilation of the builtin module
-	// to increase compilation time.
-	// This is on by default, since a vast majority of users do not
-	// work on the builtin module itself.
-	// generating_vh    bool
-	enable_globals   bool // allow __global for low level code
-	is_fmt           bool
-	is_vet           bool
-	is_bare          bool
-	no_preludes      bool   // Prevents V from generating preludes in resulting .c files
-	custom_prelude   string // Contents of custom V prelude that will be prepended before code in resulting .c files
-	lookup_path      []string
-	bare_builtin_dir string // Path to implementation of malloc, memset, etc. Only used if is_bare is true
-	output_cross_c   bool   // true, when the user passed `-os cross`
-	prealloc         bool
-	vroot            string
-	out_name_c       string // full os.real_path to the generated .tmp.c file; set by builder.
-	out_name         string
-	path             string // Path to file/folder to compile
-	// -d vfmt and -d another=0 for `$if vfmt { will execute }` and `$if another ? { will NOT get here }`
-	compile_defines     []string    // just ['vfmt']
-	compile_defines_all []string    // contains both: ['vfmt','another']
-	run_args            []string    // `v run x.v 1 2 3` => `1 2 3`
-	printfn_list        []string    // a list of generated function names, whose source should be shown, for debugging
-	print_v_files       bool        // when true, just print the list of all parsed .v files then stop.
-	skip_running        bool        // when true, do no try to run the produced file (set by b.cc(), when -o x.c or -o x.js)
-	skip_warnings       bool        // like C's "-w", forces warnings to be ignored.
-	warn_impure_v       bool        // -Wimpure-v, force a warning for JS.fn()/C.fn(), outside of .js.v/.c.v files. TODO: turn to an error by default
-	warns_are_errors    bool        // -W, like C's "-Werror", treat *every* warning is an error
-	fatal_errors        bool        // unconditionally exit after the first error with exit(1)
-	reuse_tmpc          bool        // do not use random names for .tmp.c and .tmp.c.rsp files, and do not remove them
-	use_color           ColorOutput // whether the warnings/errors should use ANSI color escapes.
-	is_parallel         bool
-	error_limit         int
-	is_vweb             bool // skip _ var warning in templates
-	only_check_syntax   bool // when true, just parse the files, then stop, before running checker
-	experimental        bool // enable experimental features
-	skip_unused         bool // skip generating C code for functions, that are not used
-	show_timings        bool // show how much time each compiler stage took
-	is_ios_simulator    bool
-	is_apk              bool     // build as Android .apk format
-	cleanup_files       []string // list of temporary *.tmp.c and *.tmp.c.rsp files. Cleaned up on successfull builds.
-	build_options       []string // list of options, that should be passed down to `build-module`, if needed for -usecache
-	cache_manager       vcache.CacheManager
-	is_help             bool // -h, -help or --help was passed
-	gc_mode             GarbageCollectionMode = .no_gc // .no_gc, .boehm, .boehm_leak, ...
-	is_cstrict          bool                  // turn on more C warnings; slightly slower
-	assert_failure_mode AssertFailureMode // whether to call abort() or print_backtrace() after an assertion failure
-	// checker settings:
-	checker_match_exhaustive_cutoff_limit int = 12
+	verbose               bool
+	no_parallel           bool
+	output_file           string
+	target                Target = host_target()
+	user_defines          []string
+	compile_values        map[string]string
+	backend               string = 'c'
+	ccompiler             string = 'gcc'
+	c99                   bool
+	force_bounds_checking bool
+	enable_globals        bool
+	vroot                 string = detect_vroot()
+	vexe                  string = detect_vexe()
+	vhash                 string
+	vcurrent_hash         string
+	selfhost              bool
+	building_v            bool // compiling the V compiler itself: no generics, skip monomorphization
+	is_prod               bool
+	warn_about_allocs     bool
+	is_debug              bool
+	is_test               bool // at least one compatible user test file is being compiled
+	is_fmt                bool // preserve source-only syntax needed by the V formatter
+	migrate_json2         bool // rewrite supported legacy json calls while formatting
+	is_livemain           bool
+	is_liveshared         bool
+	is_shared             bool
+	subsystem             Subsystem
+	no_builtin            bool
+	no_preludes           bool
+	module_search_paths   []string
+	// module_resolution_root is the directory that owns the entry sources. It
+	// distinguishes a project's retired `modules/` lookup level from a project
+	// whose own root happens to carry that name.
+	module_resolution_root string
+	thread_stack_size      int = 8 * 1024 * 1024
+	// target_libc_headers marks a target that supplies the C library headers
+	// itself, so the generated C must include them rather than restate what they
+	// declare. A kernel, compiling `-nostdinc` against its own header tree, is the
+	// case. It cannot be inferred from the target OS, which also hosts ordinary
+	// programs that link the host's libc. Distinct from V1's `-freestanding`,
+	// which means no libc at all.
+	target_libc_headers bool
+	// V3 backends currently do not lower V inline-assembly nodes. Keep this an
+	// explicit capability so guarded stdlib assembly selects its software path.
+	supports_inline_asm            bool
+	preserve_comptime_conditionals bool
+	// exclude holds the `-exclude` glob patterns, already expanded for `@vroot`,
+	// `@vlib` and `@vmodules`. A source file whose path matches one of them is
+	// dropped from every directory listing, e.g. `-exclude @vlib/math/*.c.v`
+	// selects the pure V implementations of the math module.
+	exclude []string
+	// output_cross_c requests portable C that is not tied to one target OS,
+	// architecture or C compiler (`-os cross`). Target-dependent `$if` branches
+	// are all kept and decided by the C preprocessor instead of by the checker.
+	output_cross_c bool
+	// raw_vsh_file is the real path of an input without the `.vsh` extension that
+	// is still compiled as a V script (`-raw-vsh-tmp-prefix`).
+	raw_vsh_file string
+pub:
+	build_date      string
+	build_time      string
+	build_timestamp string
 }
 
-pub fn parse_args(known_external_commands []string, args []string) (&Preferences, string) {
-	mut res := &Preferences{}
-	$if x64 {
-		res.m64 = true // follow V model by default
+// without_excluded returns files, minus the ones matched by a `-exclude` pattern.
+pub fn (p &Preferences) without_excluded(files []string) []string {
+	if p.exclude.len == 0 {
+		return files
 	}
-	mut command := ''
-	mut command_pos := 0
-	// for i, arg in args {
-	for i := 0; i < args.len; i++ {
-		arg := args[i]
-		current_args := args[i..].clone()
-		match arg {
-			'-apk' {
-				res.is_apk = true
-				res.build_options << arg
+	mut kept := []string{cap: files.len}
+	for file in files {
+		mut is_excluded := false
+		for pattern in p.exclude {
+			if file.match_glob(pattern) {
+				is_excluded = true
+				break
 			}
-			'-arch' {
-				target_arch := cmdline.option(current_args, '-arch', '')
-				i++
-				target_arch_kind := arch_from_string(target_arch) or {
-					eprintln('unknown architecture target `$target_arch`')
-					exit(1)
+		}
+		if !is_excluded {
+			kept << file
+		}
+	}
+	return kept
+}
+
+// Target is the canonical description of the platform for which code is generated.
+// Host properties must not be used for target-dependent source selection or semantics.
+pub struct Target {
+pub:
+	os            string
+	arch          string
+	abi           string
+	endian        string
+	pointer_bits  int
+	object_format string
+}
+
+// host_arch returns the normalized architecture of the compiler process.
+pub fn host_arch() string {
+	$if arm64 {
+		return 'arm64'
+	} $else $if amd64 {
+		return 'amd64'
+	} $else $if arm32 {
+		return 'arm32'
+	} $else $if rv32 {
+		return 'riscv32'
+	} $else $if rv64 {
+		return 'riscv64'
+	} $else $if s390x {
+		return 's390x'
+	} $else $if ppc64le {
+		return 'ppc64le'
+	} $else $if ppc64 {
+		return 'ppc64'
+	} $else $if ppc {
+		return 'ppc'
+	} $else $if loongarch64 {
+		return 'loongarch64'
+	} $else $if sparc64 {
+		return 'sparc64'
+	} $else $if wasm32 {
+		return 'wasm32'
+	} $else $if i386 {
+		return 'x86'
+	} $else $if x32 {
+		return 'x86'
+	} $else {
+		return 'unknown'
+	}
+}
+
+// host_target returns the platform on which the compiler process is running.
+pub fn host_target() Target {
+	return target_from(os.user_os(), host_arch()) or {
+		panic('unsupported compiler host target ${os.user_os()}/${host_arch()}')
+	}
+}
+
+// default_thread_stack_size returns the target-specific spawned-thread stack size.
+pub fn (target Target) default_thread_stack_size() int {
+	return if target.pointer_bits == 32 { 2 * 1024 * 1024 } else { 8 * 1024 * 1024 }
+}
+
+// target_from validates and canonicalizes an OS/architecture pair.
+pub fn target_from(os_name string, arch_name string) !Target {
+	target_os := normalized_os(os_name.trim_space().to_lower())
+	target_arch := normalized_arch(arch_name.trim_space().to_lower())
+	if target_os !in ['windows', 'macos', 'linux', 'freebsd', 'openbsd', 'netbsd', 'dragonfly',
+		'android', 'termux', 'ios', 'solaris', 'qnx', 'haiku', 'serenity', 'vinix', 'wasm32_emscripten'] {
+		return error('unsupported target OS `${os_name}`')
+	}
+	if target_arch !in ['amd64', 'arm64', 'x86', 'arm32', 'riscv32', 'riscv64', 'ppc', 'ppc64',
+		'ppc64le', 's390x', 'loongarch64', 'sparc64', 'wasm32'] {
+		return error('unsupported target architecture `${arch_name}`')
+	}
+	if target_os == 'wasm32_emscripten' && target_arch != 'wasm32' {
+		return error('target OS `wasm32_emscripten` requires architecture `wasm32`')
+	}
+	endian := if target_arch in ['ppc', 'ppc64', 's390x', 'sparc64'] { 'big' } else { 'little' }
+	pointer_bits := if target_arch in ['x86', 'arm32', 'riscv32', 'ppc', 'wasm32'] {
+		32
+	} else {
+		64
+	}
+	abi := match target_os {
+		'windows' { 'windows' }
+		'macos', 'ios' { 'darwin' }
+		'android', 'termux' { 'android' }
+		'wasm32_emscripten' { 'emscripten' }
+		else { 'gnu' }
+	}
+
+	object_format := match target_os {
+		'windows' { 'coff' }
+		'macos', 'ios' { 'macho' }
+		'wasm32_emscripten' { 'wasm' }
+		else { 'elf' }
+	}
+
+	return Target{
+		os:            target_os
+		arch:          target_arch
+		abi:           abi
+		endian:        endian
+		pointer_bits:  pointer_bits
+		object_format: object_format
+	}
+}
+
+// new_preferences supports new preferences handling for pref.
+pub fn new_preferences() &Preferences {
+	build_time := target_build_time()
+	// Formatted by hand: the first C strftime call of a process initializes
+	// the timezone data, which costs about half a millisecond per compile.
+	return &Preferences{
+		build_date:      '${build_time.year}-${two_digits(build_time.month)}-${two_digits(build_time.day)}'
+		build_time:      '${two_digits(build_time.hour)}:${two_digits(build_time.minute)}:${two_digits(build_time.second)}'
+		build_timestamp: build_time.unix().str()
+	}
+}
+
+// option_may_consume_value reports whether an option can consume the following argument.
+pub fn option_may_consume_value(option string) bool {
+	return option in ['-wasm-stack-top', '-arch', '-assert', '-e', '-subsystem', '-icon', '--icon',
+		'-seticon', '--seticon', '-gc', '-print_autofree_vars_in_fn', '-trace-fns', '-prof', '-profile',
+		'-cov', '-coverage', '-profile-fns', '-bug-report-url', '-run-only', '-exclude', '-file-list',
+		'-test-runner', '-dump-c-flags', '-dump-modules', '-dump-files', '-dump-defines',
+		'-generate-c-project', '-macosx-version-min', '-os', '-printfn', '-cflags', '-ldflags',
+		'-d', '-define', '-message-limit', '-thread-stack-size', '-cc', '-c++',
+		'-checker-match-exhaustive-cutoff-limit', '-o', '-output', '-b', '-backend', '-compile-backend',
+		'--compile-backend', '-path', '-bare-builtin-dir', '-custom-prelude', '-raw-vsh-tmp-prefix',
+		'-cmain', '-line-info', '-memory-limit', '--memory-limit']
+}
+
+fn two_digits(value int) string {
+	if value < 10 {
+		return '0' + value.str()
+	}
+	return value.str()
+}
+
+// has_macos_v3_caller_environment reports whether the macOS driver transported
+// the environment that should remain visible to compiled programs.
+pub fn has_macos_v3_caller_environment() bool {
+	return os.getenv(macos_v3_caller_vexe_present_env) in ['0', '1']
+		&& os.getenv(macos_v3_caller_vchild_present_env) in ['0', '1']
+}
+
+// macos_v3_caller_env_value returns the caller-visible value for compile-time `$env`.
+pub fn macos_v3_caller_env_value(name string) string {
+	if name in macos_v3_private_environment_names {
+		return ''
+	}
+	if !has_macos_v3_caller_environment() {
+		return os.getenv(name)
+	}
+	if name == 'VEXE' {
+		return if os.getenv(macos_v3_caller_vexe_present_env) == '1' {
+			os.getenv(macos_v3_caller_vexe_env)
+		} else {
+			''
+		}
+	}
+	if name == 'VCHILD' {
+		return if os.getenv(macos_v3_caller_vchild_present_env) == '1' {
+			os.getenv(macos_v3_caller_vchild_env)
+		} else {
+			''
+		}
+	}
+	if name == 'V_MACOS_V3_NO_FALLBACK'
+		&& os.getenv(macos_v3_caller_no_fallback_present_env) in ['0', '1'] {
+		return if os.getenv(macos_v3_caller_no_fallback_present_env) == '1' {
+			os.getenv(macos_v3_caller_no_fallback_env)
+		} else {
+			''
+		}
+	}
+	return os.getenv(name)
+}
+
+// macos_v3_caller_environment returns the environment that delegated run children should see.
+pub fn macos_v3_caller_environment() map[string]string {
+	mut environment := os.environ()
+	if has_macos_v3_caller_environment() {
+		restore_macos_v3_caller_environment_value(mut environment, 'VEXE', macos_v3_caller_vexe_env, macos_v3_caller_vexe_present_env)
+		restore_macos_v3_caller_environment_value(mut environment, 'VCHILD', macos_v3_caller_vchild_env, macos_v3_caller_vchild_present_env)
+	}
+	if os.getenv(macos_v3_caller_no_fallback_present_env) in ['0', '1'] {
+		restore_macos_v3_caller_environment_value(mut environment, 'V_MACOS_V3_NO_FALLBACK', macos_v3_caller_no_fallback_env, macos_v3_caller_no_fallback_present_env)
+	}
+	for name in macos_v3_private_environment_names {
+		environment.delete(name)
+	}
+	return environment
+}
+
+fn restore_macos_v3_caller_environment_value(mut environment map[string]string, name string, value_name string, present_name string) {
+	if os.getenv(present_name) == '1' {
+		environment[name] = os.getenv(value_name)
+	} else {
+		environment.delete(name)
+	}
+}
+
+fn target_build_time() time.Time {
+	source_date_epoch := os.getenv('SOURCE_DATE_EPOCH')
+	if source_date_epoch.len == 0 {
+		return time.utc()
+	}
+	return time.unix_nanosecond(source_date_epoch.i64(), 0)
+}
+
+// detect_vroot resolves detect vroot information for pref.
+fn detect_vroot() string {
+	baked_root := @VMODROOT
+	if baked_root.len > 0 {
+		return baked_root
+	}
+	if os.args.len > 0 && os.args[0].len > 0 {
+		vroot := detect_vroot_from(os.args[0])
+		if vroot.len > 0 {
+			return vroot
+		}
+	}
+	return detect_vroot_from(os.getwd())
+}
+
+fn detect_vexe() string {
+	env_vexe := os.getenv('VEXE')
+	if env_vexe.len > 0 {
+		return os.real_path(env_vexe)
+	}
+	exe := os.executable()
+	if exe.len > 0 {
+		return os.real_path(exe)
+	}
+	if os.args.len > 0 && os.args[0].len > 0 {
+		return os.real_path(os.args[0])
+	}
+	vroot := detect_vroot()
+	if vroot.len > 0 {
+		return os.join_path_single(vroot, 'v')
+	}
+	return ''
+}
+
+// detect_vroot_from resolves detect vroot from information for pref.
+fn detect_vroot_from(start string) string {
+	if start.len == 0 {
+		return ''
+	}
+	mut dir := start
+	if !os.is_abs_path(dir) {
+		cwd := os.getwd()
+		if cwd.len > 0 {
+			dir = os.join_path_single(cwd, dir)
+		}
+	}
+	if !os.is_dir(dir) {
+		dir = os.dir(dir)
+	}
+	for _ in 0 .. 8 {
+		if os.is_dir(os.join_path_single(os.join_path_single(dir, 'vlib'), 'builtin')) {
+			return dir
+		}
+		// See nearest_vroot_for_path in v.driver: walking with `os.dir` escapes a
+		// bare Windows drive into the relative `.`, which then matches the current
+		// directory instead of the directory the input actually lives in.
+		parent := os.parent_dir(dir)
+		if parent.len == 0 {
+			break
+		}
+		dir = parent
+	}
+	return ''
+}
+
+// expand_module_search_paths expands the value of `-path`: the search roots are
+// separated by `|` (or the OS path delimiter), `@vlib` and `@vmodules` stand for the
+// vlib folder and the global module folders, and `@vroot` for the V root folder.
+pub fn expand_module_search_paths(spec string, vroot string) []string {
+	if spec.len == 0 {
+		return []
+	}
+	mut expanded := []string{}
+	for path in spec.replace('|', os.path_delimiter).split(os.path_delimiter) {
+		match path {
+			'@vlib' { expanded << os.join_path_single(vroot, 'vlib') }
+			'@vmodules' { expanded << os.vmodules_paths() }
+			else { expanded << path.replace('@vroot', vroot) }
+		}
+	}
+	return expanded
+}
+
+// get_vlib_module_path returns get vlib module path data for Preferences.
+pub fn (p &Preferences) get_vlib_module_path(mod string) string {
+	mod_path := vlib_module_path(mod)
+	return os.join_path_single(os.join_path_single(p.vroot, 'vlib'), mod_path)
+}
+
+// get_module_path returns get module path data for Preferences.
+pub fn (p &Preferences) get_module_path(mod string, importing_file_path string) string {
+	mod_path := mod.replace('.', os.path_separator)
+	// Absolutize the importer like V1's Builder.find_module_path does
+	// (`os.real_path(fpath)`). When the input is given as a relative path (e.g.
+	// `v3 -o out .`), the parsed file paths are relative too (`./doka.v`), and a
+	// parent-directory walk starting from `.` could never climb above the project
+	// dir to find sibling modules.
+	abs_importer := os.real_path(importing_file_path)
+	importer_dir := os.dir(abs_importer)
+	// 1. relative to the importing file's directory
+	if relative_path := module_path_from_search_root(mod, mod_path, importer_dir) {
+		return relative_path
+	}
+	// 2. explicitly ordered module search paths, when supplied with `-path`
+	if p.module_search_paths.len > 0 {
+		for search_root in p.module_search_paths {
+			if explicit_path := module_path_from_search_root(mod, mod_path, search_root) {
+				return explicit_path
+			}
+		}
+		return ''
+	}
+	// 3. vlib
+	vlib_root := os.join_path_single(p.vroot, 'vlib')
+	if vlib_path := module_path_from_search_root(mod, mod_path, vlib_root) {
+		return vlib_path
+	}
+	// 4. ~/.vmodules (or $VMODULES)
+	if vmodules_path := module_path_from_search_root(mod, mod_path, vmodules_dir()) {
+		return vmodules_path
+	}
+	// 5. walk up the parent directories of the importing file, like V1's
+	// Builder.find_module_path. This finds sibling projects: e.g. importing
+	// `viper` from ~/code/doka/doka.v resolves to ~/code/viper.
+	// The retired `modules/` namespace is passed by on the way: what it holds is
+	// `modules.<name>` even to the files inside it, and stopping there would keep
+	// the virtual layout alive between the modules left in it.
+	mut current_dir := importer_dir
+	for {
+		if !is_retired_modules_namespace(current_dir, p.module_resolution_root) {
+			if try_path := module_path_from_search_root(mod, mod_path, current_dir) {
+				return try_path
+			}
+		}
+		// An explicit `.v.mod.stop` marker ends the walk: what lies above it is
+		// not part of this project, so a module up there is not what the import
+		// means.
+		if is_module_search_stop_dir(current_dir) {
+			break
+		}
+		parent_dir := os.dir(current_dir)
+		if parent_dir == current_dir {
+			break
+		}
+		current_dir = parent_dir
+	}
+	return ''
+}
+
+// module_search_stop_marker is the file that explicitly ends the module search
+// in a directory: the module lookups that walk up from a file do not continue
+// above a directory that holds it. It is what a test session's temp directory
+// carries, so that tests never resolve against whatever contains that directory.
+pub const module_search_stop_marker = '.v.mod.stop'
+
+// is_module_search_stop_dir reports whether `dir` holds the
+// module_search_stop_marker.
+pub fn is_module_search_stop_dir(dir string) bool {
+	return os.exists(os.join_path_single(dir, module_search_stop_marker))
+}
+
+// is_retired_modules_namespace reports whether a directory is the `modules/` a
+// project used to keep its modules in -- the virtual lookup root this compiler no
+// longer searches. `module_resolution_root` is the root holding the active entry
+// sources. A `modules` ancestor of that root is a project which merely carries
+// the name; a sibling beneath the same project root is the retired namespace.
+pub fn is_retired_modules_namespace(dir string, module_resolution_root string) bool {
+	if !module_resolution_dir_matches_modules_namespace(dir) {
+		return false
+	}
+	if os.is_file(os.join_path_single(dir, 'v.mod')) {
+		return false
+	}
+	if module_resolution_root != '' {
+		resolved_dir := canonical_module_resolution_path(dir)
+		resolved_root := canonical_module_resolution_path(module_resolution_root)
+		if module_resolution_path_is_within(resolved_root, resolved_dir) {
+			return false
+		}
+		if module_resolution_path_is_within(resolved_root, canonical_module_resolution_path(os.dir(dir))) {
+			return true
+		}
+	}
+	return os.is_file(os.join_path_single(os.dir(dir), 'v.mod'))
+}
+
+fn module_resolution_dir_matches_modules_namespace(dir string) bool {
+	name := os.file_name(dir)
+	if name == 'modules' {
+		return true
+	}
+	if name.to_lower_ascii() != 'modules' {
+		return false
+	}
+	// A case variant is `modules` only when the filesystem resolves the literal
+	// spelling to this same directory. This keeps `Modules` distinct on a
+	// case-sensitive filesystem while covering Windows and case-insensitive macOS.
+	literal_path := os.join_path_single(os.dir(dir), 'modules')
+	if !os.is_dir(literal_path) {
+		return false
+	}
+	dir_stat := os.stat(dir) or { return false }
+	literal_stat := os.stat(literal_path) or { return false }
+	if dir_stat.inode != 0 && literal_stat.inode != 0 {
+		return dir_stat.dev == literal_stat.dev && dir_stat.inode == literal_stat.inode
+	}
+	$if windows {
+		return true
+	}
+	return canonical_module_resolution_path(dir) == canonical_module_resolution_path(literal_path)
+}
+
+fn canonical_module_resolution_path(path string) string {
+	mut resolved := os.real_path(path).replace('\\', '/')
+	if resolved != '/' && !(resolved.len == 3 && resolved[1] == `:` && resolved[2] == `/`) {
+		resolved = resolved.trim_right('/')
+	}
+	$if windows {
+		resolved = resolved.to_lower()
+	}
+	return resolved
+}
+
+fn module_resolution_path_is_within(path string, root string) bool {
+	if path == root {
+		return true
+	}
+	if root == '' {
+		return false
+	}
+	if root == '/' || (root.len == 3 && root[1] == `:` && root[2] == `/`) {
+		return path.starts_with(root)
+	}
+	return path.starts_with(root + '/')
+}
+
+fn module_path_from_search_root(mod string, mod_path string, search_root string) ?string {
+	if alias_path := resolve_module_alias_path(search_root, mod) {
+		return alias_path
+	}
+	path := os.join_path_single(search_root, mod_path)
+	if dir_is_module(path) {
+		return path
+	}
+	return none
+}
+
+// resolve_module_alias_path resolves `@[alias: 'path'] module name` declarations
+// stored in `alias.v`. An alias applies to submodules as well.
+pub fn resolve_module_alias_path(search_root string, mod string) ?string {
+	parts := mod.split('.')
+	for part_count := parts.len; part_count > 0; part_count-- {
+		alias_dir := os.join_path_single(search_root, parts[..part_count].join(os.path_separator))
+		alias_file := os.join_path_single(alias_dir, 'alias.v')
+		if !os.is_file(alias_file) {
+			continue
+		}
+		source := os.read_file(alias_file) or { continue }
+		mut target_dir := module_alias_target_from_source(source) or { continue }
+		if target_dir.contains('@VMODROOT') {
+			vmod_root := vmod_root_for_dir(alias_dir) or { continue }
+			target_dir = target_dir.replace('@VMODROOT', vmod_root)
+		}
+		if !os.is_abs_path(target_dir) {
+			target_dir = os.join_path_single(alias_dir, target_dir)
+		}
+		if part_count < parts.len {
+			target_dir = os.join_path_single(target_dir, parts[part_count..].join(os.path_separator))
+		}
+		target_dir = os.real_path(target_dir)
+		if dir_is_module(target_dir) {
+			return target_dir
+		}
+	}
+	return none
+}
+
+fn module_alias_target_from_source(source string) ?string {
+	marker := '@[alias'
+	marker_pos := source.index(marker) or { return none }
+	mut rest := source[marker_pos + marker.len..].trim_space()
+	if !rest.starts_with(':') {
+		return none
+	}
+	rest = rest[1..].trim_space()
+	if rest.len < 2 || rest[0] !in [`'`, `"`] {
+		return none
+	}
+	quote := rest[0]
+	mut end := 1
+	for end < rest.len && rest[end] != quote {
+		end++
+	}
+	if end >= rest.len {
+		return none
+	}
+	target := rest[1..end]
+	if target.len == 0 {
+		return none
+	}
+	rest = rest[end + 1..].trim_space()
+	if !rest.starts_with(']') {
+		return none
+	}
+	rest = rest[1..].trim_space()
+	if !rest.starts_with('module ') {
+		return none
+	}
+	return target
+}
+
+fn vmod_root_for_dir(start string) ?string {
+	mut dir := os.real_path(start)
+	for dir.len > 0 {
+		if os.is_file(os.join_path_single(dir, 'v.mod')) {
+			return dir
+		}
+		if is_module_search_stop_dir(dir) || ['.git', '.hg', '.svn'].any(os.exists(os.join_path_single(dir,
+			it))) {
+			return none
+		}
+		dir = os.parent_dir(dir)
+	}
+	return none
+}
+
+// vlib_module_path maps an import name to its directory below vlib.
+fn vlib_module_path(mod string) string {
+	return mod.replace('.', os.path_separator)
+}
+
+// dir_is_module reports whether `dir` is a usable module directory: it must exist
+// and contain at least one `.v` source file. V1 applies the same `.v`-files guard
+// (`module_path_has_v_files`); without it the parent-directory walk could match an
+// unrelated directory that merely shares a module's name (e.g. `~/code/util`),
+// shadowing the real module.
+fn dir_is_module(dir string) bool {
+	if dir.len == 0 || !os.is_dir(dir) {
+		return false
+	}
+	entries := os.ls(dir) or { return false }
+	for entry in entries {
+		if entry.ends_with('.v') {
+			return true
+		}
+	}
+	return false
+}
+
+// installed_module_roots returns the directories modules are installed into:
+// vlib and the user's vmodules directories. Explicit `-path` roots are not
+// included because they may contain modules owned by the current project.
+pub fn (p &Preferences) installed_module_roots() []string {
+	mut roots := []string{}
+	roots << os.join_path_single(p.vroot, 'vlib')
+	// $VMODULES takes a list, the same as it does when modules are resolved.
+	roots << vmodules_dir().split(os.path_delimiter).filter(it.len > 0)
+	return roots
+}
+
+// vmodules_dir returns the user's global modules directory ($VMODULES or ~/.vmodules).
+fn vmodules_dir() string {
+	env_dir := os.getenv('VMODULES')
+	if env_dir.len > 0 {
+		return env_dir
+	}
+	return os.join_path_single(os.home_dir(), '.vmodules')
+}
+
+// file_has_incompatible_os_suffix converts file has incompatible os suffix data for pref.
+pub fn file_has_incompatible_os_suffix(file string, current_os string) bool {
+	return file_has_incompatible_target_suffix(file, target_from(current_os, host_arch()) or {
+		host_target()
+	})
+}
+
+// file_has_incompatible_target_suffix reports whether an OS or architecture suffix excludes
+// file from target.
+// file_name_has_marker reports whether `file` contains `marker`. File names
+// are short, so a direct scan beats the general substring search, and it
+// allocates nothing.
+@[direct_array_access]
+fn file_name_has_marker(file string, marker string) bool {
+	if marker.len == 0 || marker.len > file.len {
+		return false
+	}
+	first := marker[0]
+	for i := 0; i + marker.len <= file.len; i++ {
+		if file[i] != first {
+			continue
+		}
+		mut j := 1
+		for j < marker.len && file[i + j] == marker[j] {
+			j++
+		}
+		if j == marker.len {
+			return true
+		}
+	}
+	return false
+}
+
+// file_name_has_arch_marker reports whether `file` contains `.arch.` or
+// `_arch.` without building those marker strings.
+@[direct_array_access]
+fn file_name_has_arch_marker(file string, arch string) bool {
+	for i := 0; i + arch.len + 2 <= file.len; i++ {
+		c := file[i]
+		if (c != `.` && c != `_`) || file[i + arch.len + 1] != `.` {
+			continue
+		}
+		mut j := 0
+		for j < arch.len && file[i + 1 + j] == arch[j] {
+			j++
+		}
+		if j == arch.len {
+			return true
+		}
+	}
+	return false
+}
+
+pub fn file_has_incompatible_target_suffix(file string, target Target) bool {
+	if file_has_incompatible_os_only_suffix(file, target.os) {
+		return true
+	}
+	for arch in ['amd64', 'x64', 'x86_64', 'arm64', 'aarch64', 'x86', 'i386', 'i486', 'i586', 'i686',
+		'x32', 'x86_32', 'ia-32', 'ia32', 'arm32', 'rv32', 'riscv32', 'rv64', 'riscv64', 'ppc',
+		'ppc64', 'ppc64le', 's390x', 'loongarch64', 'sparc64', 'wasm32'] {
+		if normalized_arch(arch) != target.arch && file_name_has_arch_marker(file, arch) {
+			return true
+		}
+	}
+	return false
+}
+
+fn file_has_incompatible_os_only_suffix(file string, current_os string) bool {
+	os_name := normalized_os(current_os)
+	if os_name == 'windows' && file_name_has_marker(file, '_nix.') {
+		return true
+	}
+	if os_name != 'windows' && file_name_has_marker(file, '_windows.') {
+		return true
+	}
+	if os_name != 'linux' && file_name_has_marker(file, '_linux.') {
+		return true
+	}
+	if os_name != 'macos' && (file_name_has_marker(file, '_macos.')
+		|| file_name_has_marker(file, '_darwin.')) {
+		return true
+	}
+	if os_name != 'macos' && os_name != 'freebsd' && os_name != 'openbsd' && os_name != 'netbsd'
+		&& os_name != 'dragonfly' && file_name_has_marker(file, '_bsd.') {
+		return true
+	}
+	if file_name_has_marker(file, '_android_outside_termux.') {
+		if os_name != 'android' {
+			return true
+		}
+	} else if file_name_has_marker(file, '_termux.') {
+		if os_name != 'termux' {
+			return true
+		}
+	} else if file_name_has_marker(file, '_android.') && os_name !in ['android', 'termux'] {
+		return true
+	}
+	if os_name != 'ios' && file_name_has_marker(file, '_ios.') {
+		return true
+	}
+	if os_name != 'freebsd' && file_name_has_marker(file, '_freebsd.') {
+		return true
+	}
+	if os_name != 'openbsd' && file_name_has_marker(file, '_openbsd.') {
+		return true
+	}
+	if os_name != 'netbsd' && file_name_has_marker(file, '_netbsd.') {
+		return true
+	}
+	if os_name != 'dragonfly' && file_name_has_marker(file, '_dragonfly.') {
+		return true
+	}
+	if os_name != 'solaris' && file_name_has_marker(file, '_solaris.') {
+		return true
+	}
+	for target_os in ['qnx', 'haiku', 'serenity', 'vinix'] {
+		if os_name != target_os && file_name_has_marker(file, '_${target_os}.') {
+			return true
+		}
+	}
+	if os_name != 'wasm32_emscripten' && file_name_has_marker(file, '_wasm32_emscripten.') {
+		return true
+	}
+	return false
+}
+
+// get_v_files_from_dir returns get v files from dir data for pref.
+pub fn get_v_files_from_dir(dir string, user_defines []string, target_os string) []string {
+	return get_v_files_from_dir_for_target(dir, user_defines, target_from(target_os, host_arch()) or {
+		host_target()
+	})
+}
+
+// get_v_files_from_dir_for_target returns sources compatible with the complete target.
+pub fn get_v_files_from_dir_for_target(dir string, user_defines []string, target Target) []string {
+	if dir == '' || !os.is_dir(dir) {
+		return []string{}
+	}
+	all_files := os.ls(dir) or { return []string{} }
+	mut sorted_files := all_files.clone()
+	sorted_files.sort()
+	// The target-dependent parts of the per-file checks are computed once per
+	// directory: the architectures a file suffix may name that are not the
+	// target's, and the OS-specific suffixes of the target OS.
+	mut incompatible_archs := []string{}
+	for arch in ['amd64', 'x64', 'x86_64', 'arm64', 'aarch64', 'x86', 'i386', 'i486', 'i586', 'i686',
+		'x32', 'x86_32', 'ia-32', 'ia32', 'arm32', 'rv32', 'riscv32', 'rv64', 'riscv64', 'ppc',
+		'ppc64', 'ppc64le', 's390x', 'loongarch64', 'sparc64', 'wasm32'] {
+		if normalized_arch(arch) != target.arch {
+			incompatible_archs << arch
+		}
+	}
+	os_suffixes := os_specific_suffixes(target.os)
+	// Each file is classified once; both emission groups below reuse the result.
+	mut candidates := []VFileCandidate{cap: sorted_files.len}
+	mut has_os_specific := map[string]bool{}
+	for file in sorted_files {
+		if !file.ends_with('.v') || file.ends_with('.js.v')
+			|| file_name_has_marker(file, '_test.') {
+			continue
+		}
+		// Everything after `_d_`/`_notd_` names a compile-time define, even when
+		// that define is also an OS or architecture name. The define selector must
+		// own that suffix instead of the platform filters below.
+		is_define_specific := file_name_has_marker(file, '_d_')
+			|| file_name_has_marker(file, '_notd_')
+		if !is_define_specific && file_has_incompatible_os_only_suffix(file, target.os) {
+			continue
+		}
+		mut incompatible := false
+		if !is_define_specific {
+			for arch in incompatible_archs {
+				if file_name_has_arch_marker(file, arch) {
+					incompatible = true
+					break
 				}
-				res.arch = target_arch_kind
-				res.build_options << '$arg $target_arch'
 			}
-			'-assert' {
-				assert_mode := cmdline.option(current_args, '-assert', '')
-				match assert_mode {
-					'aborts' {
-						res.assert_failure_mode = .aborts
-					}
-					'backtraces' {
-						res.assert_failure_mode = .backtraces
-					}
-					else {
-						eprintln('unknown assert mode `-gc $assert_mode`, supported modes are:`')
-						eprintln('  `-assert aborts`     .... calls abort() after assertion failure')
-						eprintln('  `-assert backtraces` .... calls print_backtrace() after assertion failure')
-						exit(1)
-					}
-				}
-				i++
+		}
+		if incompatible {
+			continue
+		}
+		if !is_define_specific {
+			if base := os_specific_base_for(file, os_suffixes) {
+				has_os_specific[base] = true
 			}
-			'-show-timings' {
-				res.show_timings = true
+		}
+		candidates << VFileCandidate{
+			file: file
+			is_c: file.ends_with('.c.v')
+		}
+	}
+	mut v_files := []string{}
+	for backend_specific in [false, true] {
+		for candidate in candidates {
+			if candidate.is_c != backend_specific {
+				continue
 			}
-			'-check-syntax' {
-				res.only_check_syntax = true
-			}
-			'-h', '-help', '--help' {
-				// NB: help is *very important*, just respond to all variations:
-				res.is_help = true
-			}
-			'-v' {
-				// `-v` flag is for setting verbosity, but without any args it prints the version, like Clang
-				if args.len > 1 {
-					res.is_verbose = true
-				} else {
-					command = 'version'
-					command_pos = i
+			file := candidate.file
+			if base := default_file_base(file) {
+				if has_os_specific[base] {
+					continue
 				}
 			}
-			'-progress' {
-				// processed by testing tools in cmd/tools/modules/testing/common.v
-			}
-			'-Wimpure-v' {
-				res.warn_impure_v = true
-			}
-			'-Wfatal-errors' {
-				res.fatal_errors = true
-			}
-			'-silent' {
-				res.output_mode = .silent
-			}
-			'-cstrict' {
-				res.is_cstrict = true
-			}
-			'-gc' {
-				gc_mode := cmdline.option(current_args, '-gc', '')
-				match gc_mode {
-					'', 'none' {
-						res.gc_mode = .no_gc
-					}
-					'boehm_full' {
-						res.gc_mode = .boehm_full
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_full')
-					}
-					'boehm_incr' {
-						res.gc_mode = .boehm_incr
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_incr')
-					}
-					'boehm_full_opt' {
-						res.gc_mode = .boehm_full_opt
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_full')
-						parse_define(mut res, 'gcboehm_opt')
-					}
-					'boehm_incr_opt' {
-						res.gc_mode = .boehm_incr_opt
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_incr')
-						parse_define(mut res, 'gcboehm_opt')
-					}
-					'boehm' {
-						res.gc_mode = .boehm_full_opt // default mode
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_full')
-						parse_define(mut res, 'gcboehm_opt')
-					}
-					'boehm_leak' {
-						res.gc_mode = .boehm_leak
-						parse_define(mut res, 'gcboehm')
-						parse_define(mut res, 'gcboehm_leak')
-					}
-					else {
-						eprintln('unknown garbage collection mode `-gc $gc_mode`, supported modes are:`')
-						eprintln('  `-gc boehm` ............ default GC-mode (currently `boehm_full_opt`)')
-						eprintln('  `-gc boehm_full` ....... classic full collection')
-						eprintln('  `-gc boehm_incr` ....... incremental collection')
-						eprintln('  `-gc boehm_full_opt` ... optimized classic full collection')
-						eprintln('  `-gc boehm_incr_opt` ... optimized incremental collection')
-						eprintln('  `-gc boehm_leak` ....... leak detection (for debugging)')
-						eprintln('  `-gc none` ............. no garbage collection')
-						exit(1)
-					}
+			if file_name_has_marker(file, '_notd_') {
+				feature := extract_define_feature(file, '_notd_')
+				if feature.len > 0 && feature in user_defines {
+					continue
 				}
-				i++
-			}
-			'-g' {
-				res.is_debug = true
-				res.is_vlines = true
-				res.build_options << arg
-			}
-			'-cg' {
-				res.is_debug = true
-				res.is_vlines = false
-				res.build_options << arg
-			}
-			'-debug-tcc' {
-				res.ccompiler = 'tcc'
-				res.build_options << '$arg "$res.ccompiler"'
-				res.retry_compilation = false
-				res.show_cc = true
-				res.show_c_output = true
-			}
-			'-sourcemap' {
-				res.sourcemap = true
-			}
-			'-sourcemap-src-included' {
-				res.sourcemap_src_included = true
-			}
-			'-sourcemap-inline' {
-				res.sourcemap_inline = true
-			}
-			'-repl' {
-				res.is_repl = true
-			}
-			'-live' {
-				res.is_livemain = true
-			}
-			'-sharedlive' {
-				res.is_liveshared = true
-				res.is_shared = true
-			}
-			'-shared' {
-				res.is_shared = true
-			}
-			'--enable-globals' {
-				eprintln('`--enable-globals` flag is deprecated, please use `-enable-globals` instead')
-				res.enable_globals = true
-			}
-			'-enable-globals' {
-				res.enable_globals = true
-			}
-			'-autofree' {
-				res.autofree = true
-				res.build_options << arg
-			}
-			'-manualfree' {
-				res.autofree = false
-				res.build_options << arg
-			}
-			'-skip-unused' {
-				res.skip_unused = true
-			}
-			'-compress' {
-				res.compress = true
-			}
-			'-freestanding' {
-				res.is_bare = true
-				res.build_options << arg
-			}
-			'-no-retry-compilation' {
-				res.retry_compilation = false
-			}
-			'-no-preludes' {
-				res.no_preludes = true
-				res.build_options << arg
-			}
-			'-prof', '-profile' {
-				res.profile_file = cmdline.option(current_args, arg, '-')
-				res.is_prof = true
-				res.build_options << '$arg $res.profile_file'
-				i++
-			}
-			'-profile-no-inline' {
-				res.profile_no_inline = true
-			}
-			'-prod' {
-				res.is_prod = true
-				res.build_options << arg
-			}
-			'-sanitize' {
-				res.sanitize = true
-				res.build_options << arg
-			}
-			'-simulator' {
-				res.is_ios_simulator = true
-			}
-			'-stats' {
-				res.is_stats = true
-			}
-			'-obf', '-obfuscate' {
-				res.obfuscate = true
-			}
-			'-translated' {
-				res.translated = true
-			}
-			'-m32', '-m64' {
-				res.m64 = arg[2] == `6`
-				res.cflags += ' $arg'
-			}
-			'-color' {
-				res.use_color = .always
-			}
-			'-nocolor' {
-				res.use_color = .never
-			}
-			'-showcc' {
-				res.show_cc = true
-			}
-			'-show-c-output' {
-				res.show_c_output = true
-			}
-			'-show-callgraph' {
-				res.show_callgraph = true
-			}
-			'-show-depgraph' {
-				res.show_depgraph = true
-			}
-			'-dump-c-flags' {
-				res.dump_c_flags = cmdline.option(current_args, arg, '-')
-				i++
-			}
-			'-experimental' {
-				res.experimental = true
-			}
-			'-usecache' {
-				res.use_cache = true
-			}
-			'-nocache' {
-				res.use_cache = false
-			}
-			'-prealloc' {
-				res.prealloc = true
-				res.build_options << arg
-			}
-			'-parallel' {
-				res.is_parallel = true
-			}
-			'-native' {
-				res.backend = .native
-				res.build_options << arg
-			}
-			'-W' {
-				res.warns_are_errors = true
-			}
-			'-keepc' {
-				res.reuse_tmpc = true
-			}
-			'-w' {
-				res.skip_warnings = true
-			}
-			'-watch' {
-				eprintln('The -watch option is deprecated. Please use the watch command `v watch file.v` instead.')
-				exit(1)
-			}
-			'-print-v-files' {
-				res.print_v_files = true
-			}
-			'-error-limit' {
-				res.error_limit = cmdline.option(current_args, '-error-limit', '0').int()
-			}
-			'-os' {
-				target_os := cmdline.option(current_args, '-os', '')
-				i++
-				target_os_kind := os_from_string(target_os) or {
-					if target_os == 'cross' {
-						res.output_cross_c = true
-						continue
-					}
-					eprintln('unknown operating system target `$target_os`')
-					exit(1)
+			} else if file_name_has_marker(file, '_d_') {
+				feature := extract_define_feature(file, '_d_')
+				if feature.len == 0 || feature !in user_defines {
+					continue
 				}
-				res.os = target_os_kind
-				res.build_options << '$arg $target_os'
 			}
-			'-printfn' {
-				res.printfn_list << cmdline.option(current_args, '-printfn', '').split(',')
-				i++
+			v_files << os.join_path_single(dir, file)
+		}
+	}
+	return v_files
+}
+
+// VFileCandidate is a source file of a directory that passed the
+// target-independent and target-suffix filters, with its backend group.
+struct VFileCandidate {
+	file string
+	is_c bool
+}
+
+// get_test_v_files_from_dir returns backend/target/define-compatible test files in dir.
+pub fn get_test_v_files_from_dir(dir string, user_defines []string, backend string, target_os string) []string {
+	return get_test_v_files_from_dir_for_target(dir, user_defines, backend, target_from(target_os, host_arch()) or { host_target() })
+}
+
+// get_test_v_files_from_dir_for_target returns tests compatible with the complete target.
+pub fn get_test_v_files_from_dir_for_target(dir string, user_defines []string, backend string, target Target) []string {
+	if dir == '' || !os.is_dir(dir) {
+		return []string{}
+	}
+	mut files := os.ls(dir) or { return []string{} }
+	files.sort()
+	mut result := []string{}
+	for file in files {
+		path := os.join_path_single(dir, file)
+		if !is_test_file_for_platform(path, backend, target) {
+			continue
+		}
+		if file.contains('_notd_') {
+			feature := extract_test_define_feature(file, '_notd_')
+			if feature.len > 0 && feature in user_defines {
+				continue
 			}
-			'-cflags' {
-				res.cflags += ' ' + cmdline.option(current_args, '-cflags', '')
-				res.build_options << '$arg "$res.cflags.trim_space()"'
-				i++
+		} else if file.contains('_d_') {
+			feature := extract_test_define_feature(file, '_d_')
+			if feature.len > 0 && feature !in user_defines {
+				continue
 			}
-			'-d', '-define' {
-				if current_args.len > 1 {
-					define := current_args[1]
-					parse_define(mut res, define)
-				}
-				i++
-			}
-			'-cc' {
-				res.ccompiler = cmdline.option(current_args, '-cc', 'cc')
-				res.build_options << '$arg "$res.ccompiler"'
-				i++
-			}
-			'-checker-match-exhaustive-cutoff-limit' {
-				res.checker_match_exhaustive_cutoff_limit = cmdline.option(current_args,
-					arg, '10').int()
-				i++
-			}
-			'-o', '-output' {
-				res.out_name = cmdline.option(current_args, arg, '')
-				if res.out_name.ends_with('.js') {
-					res.backend = .js_node
-				}
-				if !os.is_abs_path(res.out_name) {
-					res.out_name = os.join_path(os.getwd(), res.out_name)
-				}
-				i++
-			}
-			'-b', '-backend' {
-				sbackend := cmdline.option(current_args, arg, 'c')
-				res.build_options << '$arg $sbackend'
-				b := backend_from_string(sbackend) or { continue }
-				if b.is_js() {
-					res.output_cross_c = true
-				}
-				res.backend = b
-				i++
-			}
-			'-path' {
-				path := cmdline.option(current_args, '-path', '')
-				res.build_options << '$arg "$path"'
-				res.lookup_path = path.replace('|', os.path_delimiter).split(os.path_delimiter)
-				i++
-			}
-			'-bare-builtin-dir' {
-				bare_builtin_dir := cmdline.option(current_args, arg, '')
-				res.build_options << '$arg "$bare_builtin_dir"'
-				res.bare_builtin_dir = bare_builtin_dir
-				i++
-			}
-			'-custom-prelude' {
-				path := cmdline.option(current_args, '-custom-prelude', '')
-				res.build_options << '$arg $path'
-				prelude := os.read_file(path) or {
-					eprintln('cannot open custom prelude file: $err')
-					exit(1)
-				}
-				res.custom_prelude = prelude
-				i++
-			}
-			else {
-				if command == 'build' && is_source_file(arg) {
-					eprintln('Use `v $arg` instead.')
-					exit(1)
-				}
-				if arg[0] == `-` {
-					if arg[1..] in pref.list_of_flags_with_param {
-						// skip parameter
-						i++
-						continue
-					}
-				} else {
-					if command == '' {
-						command = arg
-						command_pos = i
-						if command == 'run' {
-							break
+		}
+		result << path
+	}
+	return result
+}
+
+fn extract_test_define_feature(file string, marker string) string {
+	idx := file.index(marker) or { return '' }
+	rest := file[idx + marker.len..]
+	test_idx := rest.last_index('_test') or { return '' }
+	return rest[..test_idx]
+}
+
+pub fn is_test_file_for_backend(path string, backend string) bool {
+	file := os.file_name(path)
+	if file.ends_with('_test.v') {
+		return true
+	}
+	if file.ends_with('_test.c.v') {
+		return backend == 'c'
+	}
+	if file.ends_with('_test.js.v') {
+		// Disabled on every target until V3 has a JavaScript backend.
+		return false
+	}
+	if !file.ends_with('.v') {
+		return false
+	}
+	base := file[..file.len - 2]
+	if !base.contains('.') {
+		return false
+	}
+	backend_suffix := base.all_after_last('.')
+	test_base := base.all_before_last('.')
+	if !test_base.ends_with('_test') {
+		return false
+	}
+	if suffix_is_backend_name(backend_suffix) {
+		// A backend name wins over an architecture alias: `wasm` spells both, and
+		// `foo_test.wasm.v` is a WASM backend test, not an amd64/arm64 one.
+		return backend_suffix == backend
+	}
+	if _ := arch_from_string(backend_suffix) {
+		// `foo_test.arm64.v` names an architecture, not a backend. Whether this host
+		// can run it is decided by is_test_file_for_platform; every such test is a
+		// C-backend test.
+		return backend == 'c'
+	}
+	return backend_suffix == backend
+}
+
+// is_test_file_for_target reports whether path is a test file for backend that is compatible
+// with target_os. Platform-qualified tests use names such as `foo_windows_test.v` and must not
+// be added to a non-Windows test harness.
+pub fn is_test_file_for_target(path string, backend string, target_os string) bool {
+	return is_test_file_for_platform(path, backend, target_from(target_os, host_arch()) or {
+		host_target()
+	})
+}
+
+// is_test_file_for_platform reports whether path is a test for backend and target.
+pub fn is_test_file_for_platform(path string, backend string, target Target) bool {
+	if !is_test_file_for_backend(path, backend) {
+		return false
+	}
+	file := os.file_name(path)
+	mut probe := file
+	for marker in ['_test.c.v', '_test.js.v', '_test.v'] {
+		if file.ends_with(marker) {
+			probe = file[..file.len - marker.len] + marker.all_after_first('_test')
+			break
+		}
+	}
+	// Generic backend-suffixed tests (`foo_test.arm64.v`) are not covered by the fixed
+	// markers above; strip `_test.<backend>` so the os-suffix probe sees only the base
+	// and does not misread the backend as an incompatible os/arch suffix.
+	if probe == file && file.ends_with('.v') {
+		base := file[..file.len - 2]
+		if base.contains('.') {
+			test_base := base.all_before_last('.')
+			if test_base.ends_with('_test') {
+				suffix := base.all_after_last('.')
+				// A backend-qualified test (`foo_test.wasm.v`) is not architecture
+				// qualified, even when the backend name is also an architecture alias.
+				if !suffix_is_backend_name(suffix) {
+					if arch := arch_from_string(suffix) {
+						// An architecture-qualified test only belongs to that architecture.
+						if arch != target.arch {
+							return false
 						}
-					} else if is_source_file(command) && is_source_file(arg)
-						&& command !in known_external_commands {
-						eprintln('Too many targets. Specify just one target: <target.v|target_directory>.')
-						exit(1)
 					}
-					continue
 				}
-				if arg in ['-V', '-version', '--version'] {
-					command = 'version'
-					command_pos = i
-					continue
-				}
-				if command != '' && command != 'build-module' {
-					// arguments for e.g. fmt should be checked elsewhere
-					continue
-				}
-				extension := if command.len == 0 { '' } else { ' for command `$command`' }
-				eprintln('Unknown argument `$arg`$extension')
-				exit(1)
+				probe = test_base.all_before_last('_test') + '.v'
 			}
 		}
 	}
-	if res.is_debug {
-		parse_define(mut res, 'debug')
-	}
-
-	// res.use_cache = true
-	if command != 'doc' && res.out_name.ends_with('.v') {
-		eprintln('Cannot save output binary in a .v file.')
-		exit(1)
-	}
-	if command == 'run' {
-		res.is_run = true
-		if command_pos + 2 > args.len {
-			eprintln('v run: no v files listed')
-			exit(1)
-		}
-		res.path = args[command_pos + 1]
-		res.run_args = args[command_pos + 2..]
-		if res.path == '-' {
-			tmp_file_path := rand.ulid()
-			mut tmp_exe_file_path := res.out_name
-			mut output_option := ''
-			if tmp_exe_file_path == '' {
-				tmp_exe_file_path = '${tmp_file_path}.exe'
-				output_option = '-o "$tmp_exe_file_path"'
-			}
-			tmp_v_file_path := '${tmp_file_path}.v'
-			contents := os.get_raw_lines_joined()
-			os.write_file(tmp_v_file_path, contents) or {
-				panic('Failed to create temporary file $tmp_v_file_path')
-			}
-			run_options := cmdline.options_before(args, ['run']).join(' ')
-			command_options := cmdline.options_after(args, ['run'])[1..].join(' ')
-			vexe := vexe_path()
-			tmp_cmd := '"$vexe" $output_option $run_options run "$tmp_v_file_path" $command_options'
-			//
-			res.vrun_elog('tmp_cmd: $tmp_cmd')
-			tmp_result := os.system(tmp_cmd)
-			res.vrun_elog('exit code: $tmp_result')
-			//
-			if output_option.len != 0 {
-				res.vrun_elog('remove tmp exe file: $tmp_exe_file_path')
-				os.rm(tmp_exe_file_path) or {}
-			}
-			res.vrun_elog('remove tmp v file: $tmp_v_file_path')
-			os.rm(tmp_v_file_path) or { panic(err) }
-			exit(tmp_result)
-		}
-		must_exist(res.path)
-		if !res.path.ends_with('.v') && os.is_executable(res.path) && os.is_file(res.path)
-			&& os.is_file(res.path + '.v') {
-			eprintln('It looks like you wanted to run "${res.path}.v", so we went ahead and did that since "$res.path" is an executable.')
-			res.path += '.v'
-		}
-	} else if is_source_file(command) {
-		res.path = command
-	}
-	if !res.is_bare && res.bare_builtin_dir != '' {
-		eprintln('`-bare-builtin-dir` must be used with `-freestanding`')
-	}
-	if command == 'build-module' {
-		res.build_mode = .build_module
-		if command_pos + 1 >= args.len {
-			eprintln('v build-module: no module specified')
-			exit(1)
-		}
-		res.path = args[command_pos + 1]
-	}
-	// keep only the unique res.build_options:
-	mut m := map[string]string{}
-	for x in res.build_options {
-		m[x] = ''
-	}
-	res.build_options = m.keys()
-	// eprintln('>> res.build_options: $res.build_options')
-	res.fill_with_defaults()
-	return res, command
+	return !file_has_incompatible_target_suffix(probe, target)
 }
 
-pub fn (pref &Preferences) vrun_elog(s string) {
-	if pref.is_verbose {
-		eprintln('> v run -, $s')
+// default_file_base supports default file base handling for pref.
+fn default_file_base(file string) ?string {
+	for marker in ['_default.c.v', '_default.v'] {
+		if file.ends_with(marker) {
+			return file[..file.len - marker.len]
+		}
+	}
+	return none
+}
+
+// os_specific_base supports os specific base handling for pref.
+fn os_specific_base(file string, target_os string) ?string {
+	return os_specific_base_for(file, os_specific_suffixes(target_os))
+}
+
+// os_specific_suffixes lists the file name suffixes (`_nix`, `_macos`, ...)
+// that mark a file as specific to `target_os`.
+fn os_specific_suffixes(target_os string) []string {
+	mut suffixes := []string{}
+	os_name := normalized_os(target_os)
+	if os_name != 'windows' {
+		suffixes << '_nix'
+	}
+	match os_name {
+		'windows' {
+			suffixes << '_windows'
+		}
+		'macos' {
+			suffixes << '_macos'
+			suffixes << '_darwin'
+		}
+		'linux' {
+			suffixes << '_linux'
+		}
+		'android' {
+			suffixes << '_android_outside_termux'
+			suffixes << '_android'
+		}
+		'termux' {
+			suffixes << '_termux'
+			suffixes << '_android'
+		}
+		'ios' {
+			suffixes << '_ios'
+		}
+		'freebsd' {
+			suffixes << '_freebsd'
+			suffixes << '_bsd'
+		}
+		'openbsd' {
+			suffixes << '_openbsd'
+			suffixes << '_bsd'
+		}
+		'netbsd' {
+			suffixes << '_netbsd'
+			suffixes << '_bsd'
+		}
+		'dragonfly' {
+			suffixes << '_dragonfly'
+			suffixes << '_bsd'
+		}
+		'solaris' {
+			suffixes << '_solaris'
+		}
+		'qnx', 'haiku', 'serenity', 'vinix' {
+			suffixes << '_${os_name}'
+		}
+		'wasm32_emscripten' {
+			suffixes << '_wasm32_emscripten'
+		}
+		else {}
+	}
+
+	return suffixes
+}
+
+// os_specific_base_for returns the base name of an OS-specific file whose
+// suffix is one of `suffixes` (see os_specific_suffixes).
+fn os_specific_base_for(file string, suffixes []string) ?string {
+	if _ := default_file_base(file) {
+		return none
+	}
+	for suffix in suffixes {
+		for ext in ['.c.v', '.v'] {
+			marker := suffix + ext
+			if file.ends_with(marker) {
+				return file[..file.len - marker.len]
+			}
+		}
+	}
+	return none
+}
+
+// extract_define_feature supports extract define feature handling for pref.
+fn extract_define_feature(file string, marker string) string {
+	idx := file.index(marker) or { return '' }
+	rest := file[idx + marker.len..]
+	if rest.ends_with('.c.v') {
+		return rest[..rest.len - 4]
+	}
+	if rest.ends_with('.v') {
+		return rest[..rest.len - 2]
+	}
+	return rest
+}
+
+// normalized_os supports normalized os handling for pref.
+pub fn normalized_os(target_os string) string {
+	return match target_os {
+		'darwin' { 'macos' }
+		'mac' { 'macos' }
+		'win32' { 'windows' }
+		'emscripten' { 'wasm32_emscripten' }
+		else { target_os }
 	}
 }
 
-pub fn (pref &Preferences) should_output_to_stdout() bool {
-	return pref.out_name.ends_with('/-') || pref.out_name.ends_with(r'\-')
+// normalized_arch canonicalizes common architecture aliases.
+pub fn normalized_arch(target_arch string) string {
+	return match target_arch {
+		'x64', 'x86_64' { 'amd64' }
+		'aarch64' { 'arm64' }
+		'i386', 'i486', 'i586', 'i686', 'x32', 'x86_32', 'ia-32', 'ia32' { 'x86' }
+		'aarch32', 'arm', 'armv7', 'armv7l' { 'arm32' }
+		'rv32', 'risc-v32' { 'riscv32' }
+		'rv64', 'risc-v64', 'riscv', 'risc-v' { 'riscv64' }
+		'ppc32', 'powerpc' { 'ppc' }
+		'wasm' { 'wasm32' }
+		else { target_arch }
+	}
 }
 
-pub fn arch_from_string(arch_str string) ?Arch {
-	match arch_str {
-		'amd64', 'x86_64', 'x64', 'x86' { // amd64 recommended
-
-			return Arch.amd64
+// normalized_target_os supports normalized target os handling for Preferences.
+// ccompiler_can_assemble reports whether `ccompiler` is a GCC or Clang compatible
+// driver, one that preprocesses and assembles a `.S` file with `-c`. tcc and MSVC
+// cannot; a `cc` or `gcc` name is trusted only after its version output rules
+// out an alias for tcc.
+pub fn ccompiler_can_assemble(ccompiler string) bool {
+	real_name := os.file_name(os.real_path(ccompiler)).to_lower_ascii()
+	if tinycc_file_name(real_name) || real_name.contains('msvc')
+		|| real_name in ['cl', 'cl.exe'] {
+		return false
+	}
+	quoted_ccompiler := os.quoted_path(ccompiler)
+	for version_flag in ['--version', '-v'] {
+		res := os.exec([ccompiler, '${version_flag}'])
+		output := res.output.to_lower_ascii()
+		if ccompiler_version_is_tinycc(output)
+			|| output.contains('microsoft c/c++') || output.contains('msvc') {
+			return false
 		}
-		'aarch64', 'arm64' { // arm64 recommended
-
-			return Arch.arm64
+		if output.contains('clang') || output.contains('gcc version') || output.contains('(gcc)')
+			|| output.contains('free software foundation') || output.contains('gcc ') {
+			return true
 		}
-		'aarch32', 'arm32', 'arm' { // arm32 recommended
+	}
+	return false
+}
 
-			return Arch.arm32
-		}
-		'rv64', 'riscv64', 'risc-v64', 'riscv', 'risc-v' { // rv64 recommended
+// tcc_with_prod_requested reports whether a production C build selects TinyCC.
+// Compiler option values are skipped and the last compiler/backend options win.
+// Executable aliases follow ccompiler_is_tinycc in the caller's working directory.
+pub fn tcc_with_prod_requested(args []string) bool {
+	return tcc_with_prod_requested_in(args, '')
+}
 
-			return Arch.rv64
+// tcc_with_prod_requested_in reports whether a production C build selects TinyCC in cwd.
+// Relative compiler paths and wrapper version queries use cwd without changing the caller's
+// working directory. Compiler option values are skipped and the last compiler/backend win.
+pub fn tcc_with_prod_requested_in(args []string, cwd string) bool {
+	mut prod := false
+	mut ccompiler := ''
+	mut backend := 'c'
+	mut i := 0
+	for i < args.len {
+		arg := args[i]
+		if arg == '-prod' {
+			prod = true
+		} else if arg in ['-cc', '-b', '-backend'] && i + 1 < args.len {
+			i++
+			if arg == '-cc' { ccompiler = args[i] } else { backend = args[i] }
+		} else if arg.starts_with('-cc=') {
+			ccompiler = arg['-cc='.len..]
+		} else if arg.starts_with('-b=') {
+			backend = arg['-b='.len..]
+		} else if arg.starts_with('-backend=') {
+			backend = arg['-backend='.len..]
+		} else if arg in ['-prof', '-profile'] {
+			if prod_profile_consumes_value(args, i) { i++ }
+		} else if arg == '-cf' || option_may_consume_value(arg) {
+			i++
 		}
-		'rv32', 'riscv32' { // rv32 recommended
+		i++
+	}
+	return prod && backend == 'c' && ccompiler != '' && ccompiler_is_tinycc_in(ccompiler, cwd)
+}
 
-			return Arch.rv32
-		}
-		'x86_32', 'x32', 'i386', 'IA-32', 'ia-32', 'ia32' { // i386 recommended
+// prod_profile_consumes_value follows the launcher's optional profiling output rule.
+fn prod_profile_consumes_value(args []string, index int) bool {
+	next := args[index + 1] or { return false }
+	if next == '-' { return true }
+	if next.starts_with('-') || next in ['run', 'build', 'test', 'doc']
+		|| next.ends_with('.v') || next.ends_with('.vv') || next.ends_with('.vsh') || os.is_dir(next) {
+		return false
+	}
+	return args[index + 2..].any(!it.starts_with('-'))
+}
 
-			return Arch.i386
+// ccompiler_is_tinycc reports whether `ccompiler` is TinyCC. It resolves the path and any
+// symlink, then checks the file name with tinycc_file_name. Any other executable is asked for
+// its version banner, so a copy of tcc under another name is still recognised. Mentions of
+// TinyCC in metadata such as an installed directory do not identify a compiler. A name that
+// does not resolve to an executable is judged by its name alone.
+// Local launchable files precede PATH. Windows also permits loadable PE files with other extensions.
+pub fn ccompiler_is_tinycc(ccompiler string) bool {
+	return ccompiler_is_tinycc_in(ccompiler, os.getwd())
+}
+
+fn ccompiler_is_tinycc_in(ccompiler string, cwd string) bool {
+	work_folder := if cwd == '' { os.getwd() } else { cwd }
+	path := ccompiler_path_in(ccompiler, work_folder)
+	if path == '' {
+		mut name := ccompiler
+		$if windows {
+			name = ccompiler_windows_expand_env_vars(name)
 		}
-		'' {
-			return ._auto
+		return tinycc_file_name(os.file_name(name))
+	}
+	resolved := os.real_path(path)
+	if tinycc_file_name(os.file_name(resolved)) {
+		return true
+	}
+	if !os.is_file(resolved) {
+		return false
+	}
+	$if !windows {
+		if !os.is_executable(resolved) { return false }
+	}
+	for flag in ['--version', '-v'] {
+		version := cmdexec.run_in(resolved, [flag], work_folder).output
+		if ccompiler_version_is_tinycc(version) {
+			return true
+		}
+	}
+	return false
+}
+
+// ccompiler_path_in resolves explicit paths and PATH entries in the requested directory.
+// Match cmdexec's local-file and explicit-path rules before searching PATH.
+fn ccompiler_path_in(ccompiler string, cwd string) string {
+	mut program := ccompiler
+	$if windows {
+		program = ccompiler_windows_expand_env_vars(program)
+	}
+	path := if os.is_abs_path(program) { program } else { os.join_path(cwd, program) }
+	if os.is_file(path) && os.is_executable(path) { return path }
+	mut explicit_path := os.is_abs_path(program) || program.contains('/')
+	$if windows {
+		explicit_path = explicit_path || program.contains('\\')
+	}
+	if explicit_path {
+		$if windows {
+			return ccompiler_windows_executable_path(path)
+		} $else {
+			return path
+		}
+	}
+	mut suffixes := ['']
+	$if windows {
+		suffixes = ['.com', '.exe', '.bat', '.cmd', '']
+		if os.file_ext(program).to_lower_ascii() in suffixes && os.file_ext(program) != '' {
+			suffixes = ['']
+		}
+	}
+	for suffix in suffixes {
+		for entry in os.getenv('PATH').split(os.path_delimiter) {
+			directory := if os.is_abs_path(entry) { entry } else { os.join_path(cwd, entry) }
+			candidate := os.join_path(directory, program + suffix)
+			if os.is_file(candidate) && os.is_executable(candidate) { return candidate }
+		}
+	}
+	return ''
+}
+
+// Explicit Windows paths have CreateProcessW's single implicit `.exe` suffix.
+// Nonstandard extensions can still contain a loadable PE image.
+fn ccompiler_windows_executable_path(candidate string) string {
+	if os.is_file(candidate) && os.is_executable(candidate) { return candidate }
+	if os.file_ext(candidate) != '' { return candidate }
+	probed := candidate + '.exe'
+	if os.is_file(probed) && os.is_executable(probed) { return probed }
+	return candidate
+}
+
+// Keep the same single-pass percent expansion as cmdexec's Windows launch path.
+fn ccompiler_windows_expand_env_vars(text string) string {
+	if !text.contains('%') { return text }
+	parts := text.split('%')
+	mut out := strings.new_builder(text.len)
+	for i in 0 .. parts.len {
+		if i % 2 == 0 {
+			out.write_string(parts[i])
+			continue
+		}
+		if i == parts.len - 1 {
+			out.write_string('%')
+			out.write_string(parts[i])
+			continue
+		}
+		name := parts[i]
+		value := if name == '' { '' } else { os.getenv(name) }
+		if value != '' {
+			out.write_string(value)
+			continue
+		}
+		out.write_string('%')
+		out.write_string(name)
+		out.write_string('%')
+	}
+	return out.str()
+}
+
+// ccompiler_version_is_tinycc reports whether output contains a TinyCC version or branding
+// banner line. Paths and other metadata containing the compiler's name are ignored.
+pub fn ccompiler_version_is_tinycc(output string) bool {
+	for line in output.to_lower_ascii().split_into_lines() {
+		banner := line.trim_space()
+		if banner in ['tcc', 'tinycc', 'tiny c compiler']
+			|| banner.starts_with('tcc version ') || banner.starts_with('tinycc version ')
+			|| banner.starts_with('tiny c compiler ') {
+			return true
+		}
+	}
+	return false
+}
+
+// tinycc_file_name reports whether `file_name` is tcc or tinyc, with an optional `.exe` and an
+// optional target prefix such as `x86_64-w64-mingw32-tcc`. A name that only contains tcc, such
+// as `distcc` or `notcc`, is not TinyCC.
+pub fn tinycc_file_name(file_name string) bool {
+	mut name := file_name.to_lower_ascii()
+	if name.ends_with('.exe') {
+		name = name[..name.len - '.exe'.len]
+	}
+	return name in ['tcc', 'tinyc', 'tinycc'] || name.ends_with('-tcc') || name.ends_with('-tinycc')
+}
+
+// find_system_assembler returns a GCC or Clang compatible compiler driver found
+// on PATH, one that can assemble a preprocessed `.S` file, or none.
+pub fn find_system_assembler() ?string {
+	for candidate in ['clang', 'gcc', 'cc'] {
+		path := os.find_abs_path_of_executable(candidate) or { continue }
+		if ccompiler_can_assemble(path) {
+			return path
+		}
+	}
+	return none
+}
+
+pub fn (p &Preferences) normalized_target_os() string {
+	return p.target.os
+}
+
+// normalized_target_arch returns the canonical target architecture.
+pub fn (p &Preferences) normalized_target_arch() string {
+	return p.target.arch
+}
+
+// comptime_platform returns the established @PLATFORM name for the selected target.
+pub fn (p &Preferences) comptime_platform() string {
+	return match p.target.arch {
+		'x86' { 'i386' }
+		'riscv32' { 'rv32' }
+		'riscv64' { 'rv64' }
+		else { p.target.arch }
+	}
+}
+
+// is_cross_target reports whether is cross target applies in pref.
+pub fn (p &Preferences) is_cross_target() bool {
+	host := host_target()
+	return p.target.os != host.os || p.target.arch != host.arch
+}
+
+// comptime_flag_value supports comptime flag value handling for pref.
+pub fn comptime_flag_value(p &Preferences, name string) bool {
+	match name {
+		'macos', 'darwin', 'mac' {
+			return p.normalized_target_os() == 'macos'
+		}
+		'ios' {
+			return p.normalized_target_os() == 'ios'
+		}
+		'linux' {
+			return p.normalized_target_os() == 'linux'
+		}
+		'windows' {
+			return p.normalized_target_os() == 'windows'
+		}
+		'freebsd' {
+			return p.normalized_target_os() == 'freebsd'
+		}
+		'openbsd' {
+			return p.normalized_target_os() == 'openbsd'
+		}
+		'netbsd' {
+			return p.normalized_target_os() == 'netbsd'
+		}
+		'dragonfly' {
+			return p.normalized_target_os() == 'dragonfly'
+		}
+		'android' {
+			return p.normalized_target_os() == 'android'
+		}
+		'termux' {
+			return p.normalized_target_os() == 'termux'
+		}
+		'solaris' {
+			return p.normalized_target_os() == 'solaris'
+		}
+		'qnx', 'haiku', 'serenity', 'vinix' {
+			return p.normalized_target_os() == name
+		}
+		'wasm32_emscripten' {
+			return p.normalized_target_os() == 'wasm32_emscripten'
+		}
+		'posix', 'unix' {
+			return p.normalized_target_os() != 'windows'
+		}
+		'bsd' {
+			tos := p.normalized_target_os()
+			return tos == 'macos' || tos == 'freebsd' || tos == 'openbsd' || tos == 'netbsd'
+				|| tos == 'dragonfly'
+		}
+		'x64' {
+			return p.target.pointer_bits == 64
+		}
+		'x32' {
+			return p.target.pointer_bits == 32
+		}
+		'amd64' {
+			return p.target.arch == 'amd64'
+		}
+		'arm64', 'aarch64' {
+			return p.target.arch == 'arm64'
+		}
+		'arm32' {
+			return p.target.arch == 'arm32'
+		}
+		'i386', 'x86' {
+			return p.target.arch == 'x86'
+		}
+		'rv64', 'riscv64' {
+			return p.target.arch == 'riscv64'
+		}
+		'rv32', 'riscv32' {
+			return p.target.arch == 'riscv32'
+		}
+		's390x', 'ppc', 'ppc64', 'ppc64le', 'loongarch64', 'sparc64', 'wasm32' {
+			return p.target.arch == name
+		}
+		'little_endian' {
+			return p.target.endian == 'little'
+		}
+		'big_endian' {
+			return p.target.endian == 'big'
+		}
+		'debug' {
+			return p.is_debug
+		}
+		'prod' {
+			return p.is_prod
+		}
+		'test' {
+			return p.is_test
+		}
+		'native', 'builtin_write_buf_to_fd_should_use_c_write' {
+			return p.backend == 'arm64'
+		}
+		'gcc', 'clang', 'mingw', 'msvc', 'cplusplus' {
+			return p.backend == 'c' && p.ccompiler == name
+		}
+		'tinyc' {
+			return p.backend == 'arm64' || (p.backend in ['c', 'fastc'] && p.ccompiler == 'tinyc')
+		}
+		'no_backtrace' {
+			return p.backend == 'arm64' || name in p.user_defines
 		}
 		else {
-			return error('invalid arch: $arch_str')
+			return name in p.user_defines
 		}
 	}
 }
 
-fn must_exist(path string) {
-	if !os.exists(path) {
-		eprintln('v expects that `$path` exists, but it does not')
-		exit(1)
-	}
+// cross_target_c_macros maps a target-dependent `$if` flag to the single C
+// preprocessor macro that decides it. Flags whose C spelling needs more than one
+// macro (because a compiler defines several of them at once) are handled in
+// `cross_target_c_condition` instead. The architecture and word-size macros are
+// the ones `write_arch_macros` derives from the C compiler's own target, so one
+// portable snapshot stays correct on every platform it is later compiled on.
+//
+// Only flags that `comptime_flag_value` itself decides from the target belong
+// here: everything else (`$if glibc`, `$if mach`, ...) is a user define there and
+// must stay resolved while generating, or portable output would give it a
+// different meaning than an ordinary build does.
+pub const cross_target_c_macros = {
+	'windows':           '_WIN32'
+	'qnx':               '__QNX__'
+	'serenity':          '__serenity__'
+	'vinix':             '__vinix__'
+	'freebsd':           '__FreeBSD__'
+	'openbsd':           '__OpenBSD__'
+	'netbsd':            '__NetBSD__'
+	'dragonfly':         '__DragonFly__'
+	'termux':            '__TERMUX__'
+	'solaris':           '__sun'
+	'haiku':             '__HAIKU__'
+	'wasm32_emscripten': '__EMSCRIPTEN__'
+	'wasm32':            '__wasm32__'
+	'tinyc':             '__TINYC__'
+	'clang':             '__clang__'
+	'mingw':             '__MINGW32__'
+	'msvc':              '_MSC_VER'
+	'cplusplus':         '__cplusplus'
+	'amd64':             '__V_amd64'
+	'aarch64':           '__V_arm64'
+	'arm64':             '__V_arm64'
+	'arm32':             '__V_arm32'
+	'i386':              '__V_x86'
+	'x86':               '__V_x86'
+	'rv64':              '__V_rv64'
+	'riscv64':           '__V_rv64'
+	'rv32':              '__V_rv32'
+	'riscv32':           '__V_rv32'
+	's390x':             '__V_s390x'
+	'ppc64le':           '__V_ppc64le'
+	'ppc64':             '__V_ppc64'
+	'ppc':               '__V_ppc'
+	'loongarch64':       '__V_loongarch64'
+	'sparc64':           '__V_sparc64'
+	'x64':               'TARGET_IS_64BIT'
+	'x32':               'TARGET_IS_32BIT'
+	'little_endian':     'TARGET_ORDER_IS_LITTLE'
+	'big_endian':        'TARGET_ORDER_IS_BIG'
 }
 
-[inline]
-fn is_source_file(path string) bool {
-	return path.ends_with('.v') || os.exists(path)
-}
+// ios_c_macro is the macro Clang defines from an iOS deployment target
+// (`-miphoneos-version-min`), for both devices and the simulator. It is what
+// tells iOS apart from macOS, which shares `__APPLE__`.
+const ios_c_macro = '__ENVIRONMENT_IPHONE_OS_VERSION_MIN_REQUIRED__'
 
-pub fn backend_from_string(s string) ?Backend {
-	match s {
-		'c' { return .c }
-		'js' { return .js_node }
-		'js_node' { return .js_node }
-		'js_browser' { return .js_browser }
-		'js_freestanding' { return .js_freestanding }
-		'native' { return .native }
-		else { return error('Unknown backend type $s') }
-	}
-}
-
-// Helper function to convert string names to CC enum
-pub fn cc_from_string(cc_str string) CompilerType {
-	if cc_str.len == 0 {
-		return .gcc
-	}
-	// TODO
-	normalized_cc := cc_str.replace('\\', '/')
-	normalized_cc_array := normalized_cc.split('/')
-	last_elem := normalized_cc_array.last()
-	cc := last_elem.all_before('.')
-	if cc.contains('++') {
-		return .cplusplus
-	}
-	if cc.contains('tcc') || cc.contains('tinyc') {
-		return .tinyc
-	}
-	if cc.contains('clang') {
-		return .clang
-	}
-	if cc.contains('mingw') {
-		return .mingw
-	}
-	if cc.contains('msvc') {
-		return .msvc
-	}
-	return .gcc
-}
-
-pub fn get_host_arch() Arch {
-	// NB: we can not use `$if arch` here, because V skips cgen for the non
-	// current comptime branches by default, so there is a bootstrapping
-	// problem => the __V_architecture macro is used to resolve it.
-	// TODO: think about how to solve it for non C backends, perhaps we
-	// need a comptime `$if native {` too, and/or a mechanism to always
-	// generate all branches for specific functions?
-	if C.__V_architecture <= int(Arch._auto) || C.__V_architecture >= int(Arch._max) {
-		return Arch.amd64
-	}
-	return Arch(C.__V_architecture)
-}
-
-fn parse_define(mut prefs Preferences, define string) {
-	define_parts := define.split('=')
-	prefs.build_options << '-d $define'
-	if define_parts.len == 1 {
-		prefs.compile_defines << define
-		prefs.compile_defines_all << define
-		return
-	}
-	if define_parts.len == 2 {
-		prefs.compile_defines_all << define_parts[0]
-		match define_parts[1] {
-			'0' {}
-			'1' {
-				prefs.compile_defines << define_parts[0]
-			}
-			else {
-				println(
-					'V error: Unknown define argument value `${define_parts[1]}` for ${define_parts[0]}.' +
-					' Expected `0` or `1`.')
-				exit(1)
-			}
+// cross_target_c_condition returns the C preprocessor expression deciding a
+// target-dependent `$if` flag, or none when the flag is target independent and
+// can still be resolved while generating portable C.
+//
+// The expressions mirror `comptime_flag_value`, mutual exclusions included. A C
+// compiler targeting Android defines `__linux__` next to `__ANDROID__`, and the
+// iOS SDK defines `__APPLE__` next to the iOS marker, but V treats those as
+// distinct targets, so each broader guard excludes the narrower one. Without
+// that, `os.user_os()` - which tests `$if linux` before `$if android` - would
+// report `linux` on Android and select Linux-only code everywhere else.
+pub fn cross_target_c_condition(name string) ?string {
+	match name {
+		'linux' {
+			return '(defined(__linux__) && !defined(__ANDROID__))'
 		}
-		return
+		'android' {
+			return '(defined(__ANDROID__) && !defined(__TERMUX__))'
+		}
+		'macos', 'darwin', 'mac' {
+			return '(defined(__APPLE__) && !defined(${ios_c_macro}))'
+		}
+		'ios' {
+			// Clang defines `__APPLE__` for iOS as well; what separates the two is
+			// the deployment-target macro it sets from `-miphoneos-version-min`.
+			// There is no `__TARGET_IOS__`.
+			return 'defined(${ios_c_macro})'
+		}
+		'gcc' {
+			// GCC defines `__GNUC__`, which clang and tcc define as well; V counts
+			// those as different compilers. `__V_GCC__` is not defined by anything
+			// that compiles a portable snapshot, so it cannot be used here.
+			return '(defined(__GNUC__) && !defined(__clang__) && !defined(__TINYC__))'
+		}
+		'posix', 'unix' {
+			return '!defined(_WIN32)'
+		}
+		'bsd' {
+			// `comptime_flag_value` counts macOS but not iOS as BSD.
+			return '((defined(__APPLE__) && !defined(${ios_c_macro})) || defined(__FreeBSD__) || defined(__OpenBSD__) || defined(__NetBSD__) || defined(__DragonFly__))'
+		}
+		else {}
 	}
-	println('V error: Unknown define argument: ${define}. Expected at most one `=`.')
-	exit(1)
+	if macro := cross_target_c_macros[name] {
+		return 'defined(${macro})'
+	}
+	return none
+}
+
+// comptime_flag_is_target_dependent reports whether a `$if` flag is decided by
+// the target rather than by the build, i.e. whether portable C has to defer it
+// to the C preprocessor.
+pub fn comptime_flag_is_target_dependent(name string) bool {
+	if _ := cross_target_c_condition(name) {
+		return true
+	}
+	return false
+}
+
+// comptime_optional_flag_value supports comptime optional flag value handling for pref.
+pub fn comptime_optional_flag_value(p &Preferences, name string) bool {
+	if name == 'new_int' {
+		// SSA currently lowers `int` to i32, including array and string headers.
+		// Its builtin limits must use that width even on a 64-bit target.
+		if p.backend == 'arm64' {
+			return false
+		}
+		// The C backend lowers `int` to the target pointer width.
+		return p.target.pointer_bits == 64 || name in p.user_defines
+	}
+	// Test mode is added internally to `user_defines`, but `$if test ?` only asks
+	// whether the user supplied `-d test`. Explicit `-d` values are recorded in
+	// `compile_values`.
+	if name == 'test' && name !in p.compile_values {
+		return false
+	}
+	// Builtin spells its native backend check `$if native ?`, because the V1
+	// compatibility compiler, which still checks some fixtures, knows `native`
+	// only as a define. Here it also names the backend, as in `$if native`.
+	if name == 'native' {
+		return comptime_flag_value(p, name) || name in p.user_defines
+	}
+	return name in p.user_defines
+}
+
+// comptime_pkgconfig_value supports comptime pkgconfig value handling for pref.
+pub fn comptime_pkgconfig_value(name string) bool {
+	packages := cmdexec.split_args(name) or { return false }
+	if packages.len == 0 {
+		return false
+	}
+	mut args := ['--exists']
+	args << packages
+	result := cmdexec.run('pkg-config', args)
+	return result.exit_code == 0
 }

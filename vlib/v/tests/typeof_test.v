@@ -1,11 +1,11 @@
 fn test_typeof_on_simple_expressions() {
 	a := int(123)
-	assert typeof(int(42)) == 'int'
-	assert typeof(f64(3.14)) == 'f64'
-	assert typeof(int(2) + 2 * 10) == 'int'
-	assert typeof(f64(1.0) * 12.2) == 'f64'
+	assert unsafe { typeof(int(42)) } == 'int'
+	assert unsafe { typeof(f64(3.14)) } == 'f64'
+	assert unsafe { typeof(int(2) + 2 * 10) } == 'int'
+	assert unsafe { typeof(f64(1.0) * 12.2) } == 'f64'
 	// assert typeof(1.0 * f32(12.2)) == 'f32'
-	assert typeof(a) == 'int'
+	assert unsafe { typeof(a) } == 'int'
 	assert typeof(a).name == 'int'
 	// a2 := 123
 	// assert typeof(a2) == 'int_literal'
@@ -18,8 +18,8 @@ fn test_typeof_on_simple_expressions() {
 fn test_arrays() {
 	aint := []int{}
 	astring := []string{}
-	assert typeof(aint) == '[]int'
-	assert typeof(astring) == '[]string'
+	assert unsafe { typeof(aint) } == '[]int'
+	assert unsafe { typeof(astring) } == '[]string'
 	assert typeof(aint).name == '[]int'
 	assert typeof(astring).name == '[]string'
 }
@@ -38,12 +38,12 @@ struct FooBar {
 }
 
 fn test_typeof_on_structs() {
-	assert typeof(FooBar{}) == 'FooBar'
+	assert unsafe { typeof(FooBar{}) } == 'FooBar'
 	astruct_static := [2]FooBar{}
 	astruct_dynamic := [FooBar{}, FooBar{}]
-	assert typeof(astruct_static) == '[2]FooBar'
+	assert unsafe { typeof(astruct_static) } == '[2]FooBar'
 	assert typeof(astruct_static).name == '[2]FooBar'
-	assert typeof(astruct_dynamic) == '[]FooBar'
+	assert unsafe { typeof(astruct_dynamic) } == '[]FooBar'
 	assert typeof(astruct_dynamic).name == '[]FooBar'
 }
 
@@ -64,9 +64,9 @@ fn test_typeof_on_sumtypes() {
 	c := MySumType(FooBar{
 		x: 43
 	})
-	assert typeof(a) == 'int'
-	assert typeof(b) == 'f32'
-	assert typeof(c) == 'FooBar'
+	assert unsafe { typeof(a) } == 'int'
+	assert unsafe { typeof(b) } == 'f32'
+	assert unsafe { typeof(c) } == 'FooBar'
 	assert a.type_name() == 'int'
 	assert b.type_name() == 'f32'
 	assert c.type_name() == 'FooBar'
@@ -76,7 +76,7 @@ fn test_typeof_on_sumtypes() {
 	assert typeof(c).name == 'MySumType'
 
 	assert a.str() == '32'
-	assert b.str() == '123.'
+	assert b.str() == '123.0'
 	assert c.str() == 'FooBar'
 }
 
@@ -110,14 +110,31 @@ fn test_typeof_on_sumtypes_of_structs() {
 	b := fexpr(2)
 	c := fexpr(3)
 	d := ExprType(UnaryExpr{})
-	assert typeof(a) == 'UnaryExpr'
-	assert typeof(b) == 'BinExpr'
-	assert typeof(c) == 'BoolExpr'
-	assert typeof(d) == 'UnaryExpr'
+	assert unsafe { typeof(a) } == 'UnaryExpr'
+	assert unsafe { typeof(b) } == 'BinExpr'
+	assert unsafe { typeof(c) } == 'BoolExpr'
+	assert unsafe { typeof(d) } == 'UnaryExpr'
 	assert a.type_name() == 'UnaryExpr'
 	assert b.type_name() == 'BinExpr'
 	assert c.type_name() == 'BoolExpr'
 	assert d.type_name() == 'UnaryExpr'
+}
+
+fn test_raw_typeof_on_sumtypes_is_printable() {
+	a := fexpr(1)
+	b := fexpr(2)
+	c := fexpr(3)
+	raw_a_type := unsafe { typeof(a) }
+	raw_b_type := unsafe { typeof(b) }
+	raw_c_type := unsafe { typeof(c) }
+	// Regresses issue #26704: raw typeof(sumtype) should be usable
+	// when returned from a helper and printable via the stored result.
+	println(raw_a_type)
+	println(raw_b_type)
+	println(raw_c_type)
+	assert raw_a_type == 'UnaryExpr'
+	assert raw_b_type == 'BinExpr'
+	assert raw_c_type == 'BoolExpr'
 }
 
 fn myfn(i int) int {
@@ -127,8 +144,8 @@ fn myfn(i int) int {
 fn myfn2() {
 }
 
-fn myfn3(i int, s string) byte {
-	return byte(0)
+fn myfn3(i int, s string) u8 {
+	return u8(0)
 }
 
 fn myfn4() i8 {
@@ -136,22 +153,22 @@ fn myfn4() i8 {
 }
 
 fn test_typeof_on_fn() {
-	assert typeof(myfn) == 'fn (int) int'
-	assert typeof(myfn2) == 'fn ()'
-	assert typeof(myfn3) == 'fn (int, string) byte'
-	assert typeof(myfn4) == 'fn () i8'
-	assert typeof(myfn).name == typeof(myfn)
+	assert unsafe { typeof(myfn) } == 'fn (int) int'
+	assert unsafe { typeof(myfn2) } == 'fn ()'
+	assert unsafe { typeof(myfn3) } == 'fn (int, string) u8'
+	assert unsafe { typeof(myfn4) } == 'fn () i8'
+	assert typeof(myfn).name == unsafe { typeof(myfn) }
 	assert typeof(&myfn).name == '&fn (int) int'
-	assert typeof(myfn2).name == typeof(myfn2)
-	assert typeof(myfn3).name == typeof(myfn3)
-	assert typeof(myfn4).name == typeof(myfn4)
+	assert typeof(myfn2).name == unsafe { typeof(myfn2) }
+	assert typeof(myfn3).name == unsafe { typeof(myfn3) }
+	assert typeof(myfn4).name == unsafe { typeof(myfn4) }
 }
 
-fn type_name<T>(v T) string {
+fn type_name[T](v T) string {
 	return typeof(v).name
 }
 
-fn array_item_type<T>(v []T) string {
+fn array_item_type[T](v []T) string {
 	return typeof(v[0]).name
 }
 
@@ -169,19 +186,28 @@ fn test_generic_type() {
 }
 
 fn variadic_int(x ...int) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn variadic_bool(x ...bool) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn variadic_f64(x ...f64) string {
-	return typeof(x)
+	return unsafe { typeof(x) }
 }
 
 fn test_variadic_type() {
 	assert variadic_int(1, 2, 3) == '...int'
 	assert variadic_bool(true, false) == '...bool'
 	assert variadic_f64(3.1, 3.2) == '...f64'
+}
+
+fn test_typeof_typ_field() {
+	a := 123
+	b := &a
+	assert typeof(a).typ == typeof(a).idx
+	assert typeof(a).typ == typeof[int]().idx
+	assert typeof(b).typ == typeof(b).idx
+	assert typeof[FooBar]().typ == typeof[FooBar]().idx
 }

@@ -1,0 +1,21 @@
+import db.sqlite
+import json2
+
+struct Tiddler {
+	id      int
+	created int
+}
+
+struct Tiddlers {
+	id      int @[primary; sql: serial]
+	created string
+}
+
+fn main() {
+	tiddler := json2.decode[Tiddler]('{}') or { Tiddler{} }
+	db := sqlite.connect(':memory:') or { panic(err) }
+	sql db {
+		create table Tiddlers
+		insert tiddler into Tiddlers
+	}!
+}

@@ -1,5 +1,21 @@
 type MyInt = int
 
+fn test_shift_left_precedence() {
+	x := u32(20)
+	base := u32(1)
+	shift := u32(3)
+	assert x + base << shift == (x + (base << shift)), '<< should have higher precedence than +'
+	assert x - base << shift == (x - (base << shift)), '<< should have higher precedence than -'
+}
+
+fn test_shift_right_precedence() {
+	x := u32(20)
+	base := u32(100)
+	shift := u32(2)
+	assert x + base >> shift == (x + (base >> shift)), '>> should have higher precedence than +'
+	assert x - base >> shift == (x - (base >> shift)), '>> should have higher precedence than -'
+}
+
 fn test_shift_operators() {
 	// check that shift works with all integer types
 	// as the right-hand side operand
@@ -7,7 +23,7 @@ fn test_shift_operators() {
 	b := 1024
 	i := 10
 	assert b == a << i8(i)
-	assert b == a << byte(i)
+	assert b == a << u8(i)
 	assert b == a << i16(i)
 	assert b == a << u16(i)
 	assert b == a << int(i)
@@ -15,7 +31,7 @@ fn test_shift_operators() {
 	assert b == a << i64(i)
 	assert b == a << u64(i)
 	assert a == b >> i8(i)
-	assert a == b >> byte(i)
+	assert a == b >> u8(i)
 	assert a == b >> i16(i)
 	assert a == b >> u16(i)
 	assert a == b >> int(i)
@@ -48,9 +64,9 @@ fn test_shift_operators() {
 	assert e2 == b
 	e2 >>= i64(i)
 	assert e2 == a
-	e <<= byte(i)
+	e <<= u8(i)
 	assert e == b
-	e >>= byte(i)
+	e >>= u8(i)
 	assert e == a
 	e <<= u16(i)
 	assert e == b
@@ -58,14 +74,54 @@ fn test_shift_operators() {
 	assert e == a
 	mut e3 := u64(1)
 	e3 <<= u32(i)
-	assert e3 == b
+	assert e3 == u64(b)
 	e3 >>= u32(i)
 	assert e == a
 	e3 <<= u64(i)
-	assert e3 == b
+	assert e3 == u64(b)
 	e3 >>= u64(i)
-	assert e3 == a
+	assert e3 == u64(a)
 	// Test shifts with custom int types
 	x := MyInt(2)
 	assert x << 2 == 8
+}
+
+fn test_shift_assign_accepts_int_count_for_unsigned_left_operand() {
+	mut value := u64(1)
+	shift := int(3)
+	value <<= shift
+	assert value == u64(8)
+	value >>= shift
+	assert value == u64(1)
+}
+
+fn take_shifted_u16(value u16) u16 {
+	return value
+}
+
+fn test_shift_preserves_small_unsigned_left_operand_type() {
+	shift := 3
+	assert take_shifted_u16(u16(1) << shift) == 8
+	assert take_shifted_u16(u16(8) >> shift) == 1
+}
+
+fn oversized_shift_count() u64 {
+	return u64(64)
+}
+
+fn test_runtime_oversized_shift_expr() {
+	bits := u64(9221120237041090561)
+	shift := oversized_shift_count()
+	assert bits >> shift == u64(0)
+	assert bits << shift == u64(0)
+}
+
+fn test_runtime_oversized_shift_assign() {
+	shift := oversized_shift_count()
+	mut left := u64(1)
+	left <<= shift
+	assert left == u64(0)
+	mut right := u64(1)
+	right >>= shift
+	assert right == u64(0)
 }

@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
@@ -21,7 +21,9 @@ pub:
 pub fn js_node_process() JS.node_process {
 	#return process
 
-	return JS.node_process{}
+	return JS.node_process
+	{
+	}
 }
 
 fn JS.process.exit(int)

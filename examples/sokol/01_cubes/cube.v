@@ -1,88 +1,63 @@
 /**********************************************************************
-*
 * Sokol 3d cube demo
-*
 * Copyright (c) 2021 Dario Deledda. All rights reserved.
 * Use of this source code is governed by an MIT license
 * that can be found in the LICENSE file.
-*
 * TODO:
 * - add instancing
-* - add an exampel with shaders
+* - add an example with shaders
 **********************************************************************/
 import gg
-import gx
 import math
 import sokol.sapp
 import sokol.gfx
 import sokol.sgl
 
-const (
-	win_width  = 800
-	win_height = 800
-	bg_color   = gx.white
-)
+const win_width = 800
+const win_height = 800
+const bg_color = gg.white
 
 struct App {
 mut:
-	gg          &gg.Context
-	pip_3d      C.sgl_pipeline
-	texture     C.sg_image
+	gg          &gg.Context = unsafe { nil }
+	pip_3d      sgl.Pipeline
+	texture     gfx.Image
+	sampler     gfx.Sampler
 	init_flag   bool
 	frame_count int
 	mouse_x     int = -1
 	mouse_y     int = -1
 }
 
-/******************************************************************************
-*
-* Texture functions
-*
-******************************************************************************/
-fn create_texture(w int, h int, buf &u8) C.sg_image {
+fn create_texture(w int, h int, buf &u8) (gfx.Image, gfx.Sampler) {
 	sz := w * h * 4
-	mut img_desc := C.sg_image_desc{
-		width: w
-		height: h
-		num_mipmaps: 0
-		min_filter: .linear
-		mag_filter: .linear
+	mut img_desc := gfx.ImageDesc{
+		width:         w
+		height:        h
+		num_mipmaps:   0
 		// usage: .dynamic
-		wrap_u: .clamp_to_edge
-		wrap_v: .clamp_to_edge
-		label: &byte(0)
+		label:         &char(unsafe { nil })
 		d3d11_texture: 0
 	}
-	// commen if .dynamic is enabled
-	img_desc.data.subimage[0][0] = C.sg_range{
-		ptr: buf
-		size: size_t(sz)
+	// comment, if .dynamic is enabled
+	img_desc.data.subimage[0][0] = gfx.Range{
+		ptr:  buf
+		size: usize(sz)
 	}
 
-	sg_img := C.sg_make_image(&img_desc)
-	return sg_img
-}
+	sg_img := gfx.make_image(&img_desc)
 
-fn destroy_texture(sg_img C.sg_image) {
-	C.sg_destroy_image(sg_img)
-}
-
-// Use only if usage: .dynamic is enabled
-fn update_text_texture(sg_img C.sg_image, w int, h int, buf &byte) {
-	sz := w * h * 4
-	mut tmp_sbc := C.sg_image_data{}
-	tmp_sbc.subimage[0][0] = C.sg_range{
-		ptr: buf
-		size: size_t(sz)
+	mut smp_desc := gfx.SamplerDesc{
+		min_filter: .linear
+		mag_filter: .linear
+		wrap_u:     .clamp_to_edge
+		wrap_v:     .clamp_to_edge
 	}
-	C.sg_update_image(sg_img, &tmp_sbc)
+
+	sg_smp := gfx.make_sampler(&smp_desc)
+	return sg_img, sg_smp
 }
 
-/******************************************************************************
-*
-* Draw functions
-*
-******************************************************************************/
 fn draw_triangle() {
 	sgl.defaults()
 	sgl.begin_triangles()
@@ -133,7 +108,6 @@ fn cube() {
 
 fn draw_cubes(app App) {
 	rot := [f32(1.0) * (app.frame_count % 360), 0.5 * f32(app.frame_count % 360)]
-	// rot := [f32(app.mouse_x), f32(app.mouse_y)]
 
 	sgl.defaults()
 	sgl.load_pipeline(app.pip_3d)
@@ -206,7 +180,7 @@ fn draw_texture_cubes(app App) {
 	sgl.load_pipeline(app.pip_3d)
 
 	sgl.enable_texture()
-	sgl.texture(app.texture)
+	sgl.texture(app.texture, app.sampler)
 
 	sgl.matrix_mode_projection()
 	sgl.perspective(sgl.rad(45.0), 1.0, 0.1, 100.0)
@@ -243,7 +217,7 @@ fn cube_field(app App) {
 	sgl.load_pipeline(app.pip_3d)
 
 	sgl.enable_texture()
-	sgl.texture(app.texture)
+	sgl.texture(app.texture, app.sampler)
 
 	sgl.matrix_mode_projection()
 	sgl.perspective(sgl.rad(45.0), 1.0, 0.1, 200.0)
@@ -303,11 +277,6 @@ fn frame(mut app App) {
 	app.gg.end()
 }
 
-/******************************************************************************
-*
-* Init / Cleanup
-*
-******************************************************************************/
 fn my_init(mut app App) {
 	app.init_flag = true
 
@@ -315,27 +284,27 @@ fn my_init(mut app App) {
 	// for a large number of the same type of object it is better use the instances!!
 	desc := sapp.create_desc()
 	gfx.setup(&desc)
-	sgl_desc := C.sgl_desc_t{
+	sgl_desc := sgl.Desc{
 		max_vertices: 50 * 65536
 	}
 	sgl.setup(&sgl_desc)
 
 	// 3d pipeline
-	mut pipdesc := C.sg_pipeline_desc{}
-	unsafe { C.memset(&pipdesc, 0, sizeof(pipdesc)) }
+	mut pipdesc := gfx.PipelineDesc{}
+	unsafe { vmemset(&pipdesc, 0, int(sizeof(pipdesc))) }
 
-	color_state := C.sg_color_state{
-		blend: C.sg_blend_state{
-			enabled: true
-			src_factor_rgb: gfx.BlendFactor(C.SG_BLENDFACTOR_SRC_ALPHA)
-			dst_factor_rgb: gfx.BlendFactor(C.SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA)
+	color_state := gfx.ColorTargetState{
+		blend: gfx.BlendState{
+			enabled:        true
+			src_factor_rgb: .src_alpha
+			dst_factor_rgb: .one_minus_src_alpha
 		}
 	}
 	pipdesc.colors[0] = color_state
 
-	pipdesc.depth = C.sg_depth_state{
+	pipdesc.depth = gfx.DepthState{
 		write_enabled: true
-		compare: gfx.CompareFunc(C.SG_COMPAREFUNC_LESS_EQUAL)
+		compare:       .less_equal
 	}
 	pipdesc.cull_mode = .back
 	app.pip_3d = sgl.make_pipeline(&pipdesc)
@@ -352,42 +321,33 @@ fn my_init(mut app App) {
 			x := (i & 0xFF) >> 5 // 8 cell
 			// upper left corner
 			if x == 0 && y == 0 {
-				tmp_txt[i] = byte(0xFF)
-				tmp_txt[i + 1] = byte(0)
-				tmp_txt[i + 2] = byte(0)
-				tmp_txt[i + 3] = byte(0xFF)
+				tmp_txt[i] = u8(0xFF)
+				tmp_txt[i + 1] = u8(0)
+				tmp_txt[i + 2] = u8(0)
+				tmp_txt[i + 3] = u8(0xFF)
 			}
 			// low right corner
 			else if x == 7 && y == 7 {
-				tmp_txt[i] = byte(0)
-				tmp_txt[i + 1] = byte(0xFF)
-				tmp_txt[i + 2] = byte(0)
-				tmp_txt[i + 3] = byte(0xFF)
+				tmp_txt[i] = u8(0)
+				tmp_txt[i + 1] = u8(0xFF)
+				tmp_txt[i + 2] = u8(0)
+				tmp_txt[i + 3] = u8(0xFF)
 			} else {
 				col := if ((x + y) & 1) == 1 { 0xFF } else { 0 }
-				tmp_txt[i] = byte(col) // red
-				tmp_txt[i + 1] = byte(col) // green
-				tmp_txt[i + 2] = byte(col) // blue
-				tmp_txt[i + 3] = byte(0xFF) // alpha
+				tmp_txt[i] = u8(col) // red
+				tmp_txt[i + 1] = u8(col) // green
+				tmp_txt[i + 2] = u8(col) // blue
+				tmp_txt[i + 3] = u8(0xFF) // alpha
 			}
 			i += 4
 		}
 	}
 	unsafe {
-		app.texture = create_texture(w, h, tmp_txt)
+		app.texture, app.sampler = create_texture(w, h, tmp_txt)
 		free(tmp_txt)
 	}
 }
 
-fn cleanup(mut app App) {
-	gfx.shutdown()
-}
-
-/******************************************************************************
-*
-* event
-*
-******************************************************************************/
 fn my_event_manager(mut ev gg.Event, mut app App) {
 	if ev.typ == .mouse_move {
 		app.mouse_x = int(ev.mouse_x)
@@ -402,31 +362,18 @@ fn my_event_manager(mut ev gg.Event, mut app App) {
 	}
 }
 
-/******************************************************************************
-*
-* Main
-*
-******************************************************************************/
-// is needed for easier diagnostics on windows
-[console]
 fn main() {
-	// App init
-	mut app := &App{
-		gg: 0
-	}
-
+	mut app := &App{}
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: '3D Cube Demo'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		init_fn: my_init
-		cleanup_fn: cleanup
-		event_fn: my_event_manager
+		window_title:  '3D Cube Demo'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		init_fn:       my_init
+		event_fn:      my_event_manager
 	)
-
 	app.gg.run()
 }

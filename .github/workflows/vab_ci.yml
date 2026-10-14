@@ -1,52 +1,97 @@
 name: vab CI
 
 on:
+  workflow_call:
   push:
-    paths-ignore:
-      - "**.md"
+    branches:
+      - master
+    paths:
+      - 'vlib/**'
+      - 'thirdparty/**'
+      - 'cmd/tools/builders/**.v'
+      - '**/vab_ci.yml'
+      - '!**.md'
   pull_request:
-    paths-ignore:
-      - "**.md"
+    paths:
+      - 'vlib/**'
+      - 'thirdparty/**'
+      - 'cmd/tools/builders/**.v'
+      - '**/vab_ci.yml'
+      - '!**.md'
+
+concurrency:
+  group: vab-${{ github.workflow }}-${{ github.ref == 'refs/heads/master' && github.sha || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   vab-compiles-v-examples:
-    runs-on: ubuntu-20.04
-    timeout-minutes: 121
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      VAB_FLAGS: --api 30 --build-tools 29.0.0 -v 3
     steps:
-    - uses: actions/setup-java@v2
-      with:
-        distribution: 'adopt'
-        java-version: 8
+      - uses: actions/setup-java@v6
+        with:
+          distribution: 'temurin'
+          java-version: 11
 
-    - uses: actions/checkout@v2
-    - name: Build V
-      run: make -j2 && ./v -cc gcc -o v cmd/v
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build V
+        run: make -j4 && ./v symlink
 
-    - name: Clone vab
-      run: git clone --depth 1 https://github.com/vlang/vab
-    - name: Build vab
-      run: cd vab; ../v ./vab.v ; cd ..
+      - name: Install vab
+        run: |
+          v retry -- v install vab
+          v -g ~/.vmodules/vab
+          sudo ln -s ~/.vmodules/vab/vab /usr/local/bin/vab
 
-    - name: Run tests
-      run: ./v test vab
+      - name: Run tests
+        run: v -g test ~/.vmodules/vab
 
-    - name: Build vab
-      run: ./v -g vab/vab.v
+      - name: Run vab --help
+        run: vab --help
 
-    - name: Run vab --help
-      run: vab/vab --help
+      - name: Run vab doctor
+        run: |
+          vab doctor
+          which d8 || true
+          which dx || true
 
-    - name: Run vab doctor
-      run: |
-        export VEXE=./v
-        vab/vab doctor
+      - name: Build graphical V examples as APK
+        run: |
+          declare -a v_examples=('flappylearning' '2048' 'fireworks' 'tetris' 'sokol/particles' 'sokol/drawing.v' 'sokol/freetype_raven.v' 'gg/polygons.v' 'gg/raven_text_rendering.v' 'gg/rectangles.v' 'gg/stars.v' 'gg/worker_thread.v')
+          mkdir apks
+          for example in "${v_examples[@]}"; do
+            safe_name=$(echo "$example" | sed 's%/%-%' | sed 's%\.%-%' )
+            vab "examples/$example" -o "apks/$safe_name.apk"
+          done
 
-    - name: Build graphical V examples as APK
-      run: |
-        declare -a v_examples=('flappylearning' '2048' 'fireworks' 'tetris' 'sokol/particles' 'sokol/drawing.v' 'sokol/freetype_raven.v' 'gg/polygons.v' 'gg/raven_text_rendering.v' 'gg/rectangles.v' 'gg/stars.v' 'gg/worker_thread.v')
-        mkdir apks
-        export VEXE=./v
-        for example in "${v_examples[@]}"; do
-          safe_name=$(echo "$example" | sed 's%/%-%' | sed 's%\.%-%' )
-          vab/vab --api 29 --build-tools '29.0.0' -v 3 examples/$example -o apks/$safe_name.apk
-        done
+  v-compiles-os-android:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Build V
+        run: make -j4 && ./v symlink
+
+      - name: Install vab
+        run: |
+          v retry -- v install vab
+          v -g ~/.vmodules/vab
+          sudo ln -s ~/.vmodules/vab/vab /usr/local/bin/vab
+
+      - name: Run vab --help
+        run: vab --help
+
+      - name: Run vab doctor
+        run: vab doctor
+
+      - name: Check `v -os android` *without* -apk flag
+        run: .github/workflows/android_cross_compile.vsh

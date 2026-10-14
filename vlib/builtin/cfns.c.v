@@ -1,215 +1,357 @@
 module builtin
 
+@[typedef]
+pub struct C.FILE {}
+
+@[typedef]
+pub struct C.qsort_callback_func {}
+
+// Virtual C globals that are available through libc or generated C headers.
+__global C.errno int
+__global C.stdin &C.FILE
+__global C.stdout &C.FILE
+__global C.stderr &C.FILE
+__global C.environ &&char
+__global C._wyp &u64
+
 // <string.h>
-fn C.memcpy(dest &byte, src &byte, n int) voidptr
+@[markused; noalloc]
+fn C.memcpy(dest voidptr, const_src voidptr, n usize) voidptr
 
-fn C.memcmp(&byte, &byte, int) int
+@[markused; noalloc]
+fn C.memcmp(const_s1 voidptr, const_s2 voidptr, n usize) i32
 
-fn C.memmove(&byte, &byte, int) voidptr
+@[markused; noalloc]
+fn C.memmove(dest voidptr, const_src voidptr, n usize) voidptr
 
-[trusted]
-fn C.calloc(int, int) &byte
+@[markused; noalloc]
+fn C.memset(str voidptr, c i32, n usize) voidptr
 
-fn C.malloc(int) &byte
+@[noalloc]
+fn C.memchr(str voidptr, c i32, n usize) voidptr
 
-fn C.realloc(a &byte, b int) &byte
+@[noalloc]
+fn C.memmem(haystack voidptr, haystacklen usize, needle voidptr, needlelen usize) voidptr
 
+@[noalloc]
+fn C.mempcpy(dest voidptr, src voidptr, n usize) voidptr
+
+@[markused; trusted]
+fn C.calloc(usize, usize) voidptr
+
+fn C.atoi(&char) i32
+
+@[markused]
+fn C.malloc(usize) voidptr
+
+@[markused]
+fn C.realloc(a voidptr, b usize) voidptr
+
+@[markused; noalloc]
 fn C.free(ptr voidptr)
 
-[noreturn; trusted]
-fn C.exit(code int)
+@[markused]
+fn C.mmap(addr_length voidptr, length usize, prot i32, flags i32, fd i32, offset isize) voidptr
 
-fn C.qsort(base voidptr, items size_t, item_size size_t, cb qsort_callback_func)
+// C.munmap releases a memory mapping created by C.mmap.
+fn C.munmap(addr_length voidptr, len usize) i32
 
-fn C.sprintf(a ...voidptr) int
+@[markused]
+fn C.mprotect(addr_length voidptr, len usize, prot i32) i32
 
-fn C.strlen(s &char) int
+@[markused]
+fn C.aligned_alloc(align usize, size usize) voidptr
 
-fn C.sscanf(&byte, &byte, ...&byte) int
+// windows aligned memory functions
+fn C._aligned_malloc(size usize, align usize) voidptr
+fn C._aligned_free(voidptr)
+fn C._aligned_realloc(voidptr, size usize, align usize) voidptr
+fn C._aligned_offset_malloc(size usize, align usize, offset usize) voidptr
+fn C._aligned_offset_realloc(voidptr, size usize, align usize, offset usize) voidptr
+fn C._aligned_msize(voidptr, align usize, offset usize) usize
+fn C._aligned_recalloc(voidptr, num usize, size usize, align usize) voidptr
 
-[trusted]
-fn C.isdigit(c int) bool
+$if windows {
+	fn C.VirtualAlloc(voidptr, isize, u32, u32) voidptr
+	fn C.VirtualProtect(voidptr, isize, C.DWORD, &C.DWORD) bool
+}
+
+@[markused; noreturn; trusted]
+fn C.exit(code i32)
+
+@[markused]
+fn C.qsort(base voidptr, items usize, item_size usize, cb C.qsort_callback_func)
+
+@[markused; noalloc]
+fn C.strlen(const_s &char) usize
+
+@[trusted]
+fn C.isdigit(c i32) bool
 
 // stdio.h
 fn C.popen(c &char, t &char) voidptr
 
-// <execinfo.h>
-fn C.backtrace(a &voidptr, size int) int
-
-fn C.backtrace_symbols(a &voidptr, size int) &&char
-
-fn C.backtrace_symbols_fd(a &voidptr, size int, fd int)
-
 // <libproc.h>
-pub fn proc_pidpath(int, voidptr, int) int
+fn C.proc_pidpath(i32, voidptr, i32) i32
 
-fn C.realpath(&char, &char) &char
+fn C.realpath(const_path &char, resolved_path &char) &char
 
 // fn C.chmod(byteptr, mode_t) int
-fn C.chmod(&char, u32) int
+fn C.chmod(path &char, mode u32) i32
 
-fn C.printf(&char, ...voidptr) int
+@[markused]
+fn C.printf(const_format &char, opt ...voidptr) i32
 
-fn C.puts(&char) int
+fn C.dprintf(fd i32, const_format &char, opt ...voidptr) i32
 
-fn C.fputs(str &char, stream &C.FILE) int
+@[markused]
+fn C.fprintf(fstream &C.FILE, const_format &char, opt ...voidptr) i32
 
-fn C.fflush(&C.FILE) int
+fn C.sprintf(str &char, const_format &char, opt ...voidptr) i32
 
-// TODO define args in these functions
-fn C.fseek(stream &C.FILE, offset int, whence int) int
+@[markused]
+fn C.snprintf(str &char, size usize, const_format &char, opt ...voidptr) i32
 
+fn C.wprintf(const_format &u16, opt ...voidptr) i32
+
+// used by Android for (e)println to output to the Android log system / logcat
+pub fn C.android_print(fstream voidptr, const_format &char, opt ...voidptr) i32
+
+fn C.sscanf(str &char, const_format &char, opt ...voidptr) i32
+fn C.scanf(const_format &char, opt ...voidptr) i32
+
+fn C.puts(const_msg &char) i32
+
+@[trusted]
+fn C.abs(f64) f64
+
+fn C.fputs(msg &char, fstream &C.FILE) i32
+
+@[markused]
+fn C.fflush(fstream &C.FILE) i32
+
+// TODO: define args in these functions
+$if windows {
+	fn C.fseek(stream &C.FILE, offset i32, whence i32) i32
+} $else {
+	fn C.fseek(stream &C.FILE, offset isize, whence i32) i32
+}
+
+// Coverage and profiling writers call these without a V AST reference.
+@[markused]
 fn C.fopen(filename &char, mode &char) &C.FILE
 
-fn C.fileno(&C.FILE) int
+fn C.fileno(&C.FILE) i32
 
-fn C.fread(ptr voidptr, item_size size_t, items size_t, stream &C.FILE) size_t
+fn C.fread(ptr voidptr, item_size usize, items usize, stream &C.FILE) usize
 
-fn C.fwrite(ptr voidptr, item_size size_t, items size_t, stream &C.FILE) size_t
+@[markused]
+fn C.fwrite(const_ptr voidptr, item_size usize, items usize, stream &C.FILE) usize
 
-fn C.fclose(stream &C.FILE) int
+@[markused]
+fn C.fclose(stream &C.FILE) i32
 
-fn C.pclose(stream &C.FILE) int
+fn C.pclose(stream &C.FILE) i32
+
+fn C.open(path &char, flags i32, mode ...int) i32
+fn C.close(fd i32) i32
+
+fn C.strrchr(s &char, c i32) &char
+fn C.strchr(s &char, c i32) &char
+fn C.strstr(const_haystack &char, const_needle &char) &char
 
 // process execution, os.process:
-[trusted]
-fn C.getpid() int
+@[trusted]
+fn C.GetCurrentProcessId() u32
 
-fn C.getuid() int
+@[trusted]
+fn C._getpid() i32
 
-fn C.geteuid() int
+@[markused; trusted]
+fn C.getpid() i32
 
-fn C.system(cmd &char) int
+@[trusted]
+fn C.GetCurrentThreadId() u32
 
-fn C.posix_spawn(child_pid &int, path &char, file_actions voidptr, attrp voidptr, argv &&char, envp &&char) int
+@[trusted]
+fn C.gettid() u32
 
-fn C.posix_spawnp(child_pid &int, exefile &char, file_actions voidptr, attrp voidptr, argv &&char, envp &&char) int
+@[trusted]
+fn C.getuid() i32
 
-fn C.execve(cmd_path &char, args voidptr, envs voidptr) int
+@[trusted]
+fn C.geteuid() i32
 
-fn C.execvp(cmd_path &char, args &&char) int
+fn C.system(cmd &char) i32
 
-fn C._execve(cmd_path &char, args voidptr, envs voidptr) int
+fn C.posix_spawn(child_pid &int, path &char, file_actions voidptr, attrp voidptr, argv &&char, envp &&char) i32
 
-fn C._execvp(cmd_path &char, args &&char) int
+fn C.posix_spawnp(child_pid &int, exefile &char, file_actions voidptr, attrp voidptr, argv &&char, envp &&char) i32
 
-[trusted]
-fn C.fork() int
+fn C.execve(cmd_path &char, args voidptr, envs voidptr) i32
 
-fn C.wait(status &int) int
+fn C.execvp(cmd_path &char, args &&char) i32
 
-fn C.waitpid(pid int, status &int, options int) int
+fn C._execve(cmd_path &char, args voidptr, envs voidptr) i32
 
-[trusted]
-fn C.kill(pid int, sig int) int
+fn C._execvp(cmd_path &char, args voidptr) i32
 
-fn C.setenv(&char, &char, int) int
+// The generated test runner compares environment values without V AST calls.
+@[markused; noalloc]
+fn C.strcmp(const_s1 &char, const_s2 &char) i32
 
-fn C.unsetenv(&char) int
+@[trusted]
+fn C.fork() i32
 
-fn C.access(path &char, amode int) int
+fn C.wait(status &int) i32
 
-fn C.remove(filename &char) int
+fn C.waitpid(pid i32, status &int, options i32) i32
 
-fn C.rmdir(path &char) int
+@[trusted]
+fn C.kill(pid i32, sig i32) i32
 
-fn C.chdir(path &char) int
+@[markused]
+fn C.setenv(&char, &char, i32) i32
 
-fn C.rewind(stream &C.FILE) int
+fn C.unsetenv(&char) i32
 
-fn C.stat(&char, voidptr) int
+fn C.access(path &char, amode i32) i32
 
-fn C.lstat(path &char, buf &C.stat) int
+fn C.remove(filename &char) i32
 
-fn C.rename(old_filename &char, new_filename &char) int
+fn C.rmdir(path &char) i32
 
-fn C.fgets(str &char, n int, stream &C.FILE) int
+fn C.chdir(path &char) i32
 
-fn C.memset(str voidptr, c int, n size_t) int
+fn C.rewind(stream &C.FILE) i32
 
-[trusted]
-fn C.sigemptyset() int
+fn C.ftell(&C.FILE) isize
 
-fn C.getcwd(buf &char, size size_t) &char
+fn C.stat(&char, voidptr) i32
 
-[trusted]
-fn C.mktime() int
+fn C.lstat(path &char, buf &C.stat) i32
 
-fn C.gettimeofday(tv &C.timeval, tz &C.timezone) int
+fn C.statvfs(const_path &char, buf &C.statvfs) i32
 
-[trusted]
+fn C.rename(old_filename &char, new_filename &char) i32
+
+fn C.fgets(str &char, n i32, stream &C.FILE) &char
+
+fn C.feof(stream &C.FILE) i32
+
+fn C.ferror(stream &C.FILE) i32
+
+fn C.fgetpos(&C.FILE, voidptr) i32
+
+@[trusted]
+fn C.sigemptyset() i32
+
+fn C.getcwd(buf &char, size usize) &char
+
+@[trusted]
+fn C.mktime() i32
+
+fn C.gettimeofday(tv &C.timeval, tz &C.timezone) i32
+
+@[trusted]
 fn C.sleep(seconds u32) u32
 
 // fn C.usleep(usec useconds_t) int
-[trusted]
-fn C.usleep(usec u32) int
+@[trusted]
+fn C.usleep(usec u32) i32
 
-fn C.opendir(&char) voidptr
+@[typedef]
+pub struct C.DIR {
+}
 
-fn C.closedir(dirp &C.DIR) int
+fn C.opendir(&char) &C.DIR
+
+fn C.closedir(dirp &C.DIR) i32
 
 // fn C.mkdir(path &char, mode mode_t) int
-fn C.mkdir(path &char, mode u32) int
+fn C.mkdir(path &char, mode u32) i32
 
 // C.rand returns a pseudorandom integer from 0 (inclusive) to C.RAND_MAX (exclusive)
-[trusted]
-fn C.rand() int
+@[trusted]
+fn C.rand() i32
 
 // C.srand seeds the internal PRNG with the given value.
-[trusted]
+@[trusted]
 fn C.srand(seed u32)
 
 fn C.atof(str &char) f64
 
-[trusted]
-fn C.tolower(c int) int
+@[trusted]
+fn C.tolower(c i32) i32
 
-[trusted]
-fn C.toupper(c int) int
+@[trusted]
+fn C.toupper(c i32) i32
 
-[trusted]
-fn C.getchar() int
+@[trusted]
+fn C.isspace(c i32) i32
 
-[trusted]
-fn C.strerror(int) &char
+fn C.strchr(s &char, c i32) &char
 
-fn C.snprintf(str &char, size size_t, format &char, opt ...voidptr) int
+@[trusted]
+fn C.getchar() i32
 
-fn C.fprintf(voidptr, &char, ...voidptr)
+@[trusted]
+fn C.putchar(i32) i32
 
-[trusted]
-fn C.WIFEXITED(status int) bool
+fn C.strdup(s &char) &char
 
-[trusted]
-fn C.WEXITSTATUS(status int) int
+fn C.strncasecmp(s &char, s2 &char, n i32) i32
 
-[trusted]
-fn C.WIFSIGNALED(status int) bool
+fn C.strcasecmp(s &char, s2 &char) i32
 
-[trusted]
-fn C.WTERMSIG(status int) int
+fn C.strncmp(s &char, s2 &char, n usize) i32
 
-[trusted]
-fn C.isatty(fd int) int
+@[trusted]
+fn C.strerror(i32) &char
 
-fn C.syscall(number int, va ...voidptr) int
+@[trusted]
+fn C.WIFEXITED(status i32) bool
 
-fn C.sysctl(name &int, namelen u32, oldp voidptr, oldlenp voidptr, newp voidptr, newlen size_t) int
+@[trusted]
+fn C.WEXITSTATUS(status i32) i32
 
-[trusted]
-fn C._fileno(int) int
+@[trusted]
+fn C.WIFSIGNALED(status i32) bool
 
-fn C._get_osfhandle(fd int) C.intptr_t
+@[trusted]
+fn C.WTERMSIG(status i32) i32
 
-fn C.GetModuleFileName(hModule voidptr, lpFilename &u16, nSize u32) int
+@[trusted]
+fn C.isatty(fd i32) i32
+
+fn C.syscall(number i32, va ...voidptr) i32
+
+fn C.sysctl(name &i32, namelen u32, oldp voidptr, oldlenp voidptr, newp voidptr, newlen usize) i32
+
+@[trusted]
+fn C._fileno(&C.FILE) i32
+
+pub type C.intptr_t = voidptr
+
+fn C._get_osfhandle(fd i32) C.intptr_t
+
+fn C.GetModuleFileName(hModule voidptr, lpFilename &u16, nSize u32) u32
 
 fn C.GetModuleFileNameW(hModule voidptr, lpFilename &u16, nSize u32) u32
 
-fn C.CreateFile(lpFilename &u16, dwDesiredAccess u32, dwShareMode u32, lpSecurityAttributes &u16, dwCreationDisposition u32, dwFlagsAndAttributes u32, hTemplateFile voidptr) voidptr
+fn C.CreateFile(lpFilename &u16, dwDesiredAccess u32, dwShareMode u32, lpSecurityAttributes &u16, dwCreationDisposition u32,
+	dwFlagsAndAttributes u32, hTemplateFile voidptr) voidptr
 
-fn C.CreateFileW(lpFilename &u16, dwDesiredAccess u32, dwShareMode u32, lpSecurityAttributes &u16, dwCreationDisposition u32, dwFlagsAndAttributes u32, hTemplateFile voidptr) u32
+fn C.CreateFileW(lpFilename &u16, dwDesiredAccess u32, dwShareMode u32, lpSecurityAttributes &u16, dwCreationDisposition u32,
+	dwFlagsAndAttributes u32, hTemplateFile voidptr) voidptr
 
-fn C.GetFinalPathNameByHandleW(hFile voidptr, lpFilePath &u16, nSize u32, dwFlags u32) int
+$if windows {
+	// The legacy bootstrap needs this TinyCC compatibility view. The V3 backend
+	// emits its prototype from the bodyless binding below without including it.
+	#insert "@VEXEROOT/vlib/builtin/cfns_windows_tcc.h"
+}
+
+fn C.GetFinalPathNameByHandleW(hFile voidptr, lpFilePath &u16, nSize u32, dwFlags u32) u32
 
 fn C.CreatePipe(hReadPipe &voidptr, hWritePipe &voidptr, lpPipeAttributes voidptr, nSize u32) bool
 
@@ -221,242 +363,389 @@ fn C.GetComputerNameW(&u16, &u32) bool
 
 fn C.GetUserNameW(&u16, &u32) bool
 
-[trusted]
-fn C.SendMessageTimeout() u32
+@[trusted]
+fn C.SendMessageTimeout() isize
 
-fn C.SendMessageTimeoutW(hWnd voidptr, Msg u32, wParam &u16, lParam &u32, fuFlags u32, uTimeout u32, lpdwResult &u64) u32
+fn C.SendMessageTimeoutW(hWnd voidptr, msg u32, wParam &u16, lParam &u32, fuFlags u32, uTimeout u32, lpdwResult &u64) isize
 
-fn C.CreateProcessW(lpApplicationName &u16, lpCommandLine &u16, lpProcessAttributes voidptr, lpThreadAttributes voidptr, bInheritHandles bool, dwCreationFlags u32, lpEnvironment voidptr, lpCurrentDirectory &u16, lpStartupInfo voidptr, lpProcessInformation voidptr) bool
+fn C.CreateProcessW(lpApplicationName &u16, lpCommandLine &u16, lpProcessAttributes voidptr, lpThreadAttributes voidptr,
+	bInheritHandles bool, dwCreationFlags u32, lpEnvironment voidptr, lpCurrentDirectory &u16, lpStartupInfo voidptr,
+	lpProcessInformation voidptr) bool
 
-fn C.ReadFile(hFile voidptr, lpBuffer voidptr, nNumberOfBytesToRead u32, lpNumberOfBytesRead C.LPDWORD, lpOverlapped voidptr) bool
+fn C.ReadFile(hFile voidptr, lpBuffer voidptr, nNumberOfBytesToRead u32, lpNumberOfBytesRead &u32, lpOverlapped voidptr) bool
 
-fn C.GetFileAttributesW(lpFileName &byte) u32
+fn C.GetFileAttributesW(const_lpFileName &u16) u32
 
-fn C.RegQueryValueEx(hKey voidptr, lpValueName &u16, lp_reserved &u32, lpType &u32, lpData &byte, lpcbData &u32) voidptr
+fn C.RegQueryValueEx(hKey voidptr, lpValueName &u16, lp_reserved &u32, lpType &u32, lpData &u8, lpcbData &u32) i32
 
-fn C.RegQueryValueExW(hKey voidptr, lpValueName &u16, lp_reserved &u32, lpType &u32, lpData &byte, lpcbData &u32) int
+fn C.RegQueryValueExW(hKey voidptr, lpValueName &u16, lp_reserved &u32, lpType &u32, lpData &u8, lpcbData &u32) i32
 
-fn C.RegOpenKeyEx(hKey voidptr, lpSubKey &u16, ulOptions u32, samDesired u32, phkResult voidptr) voidptr
+fn C.RegOpenKeyEx(hKey voidptr, lpSubKey &u16, ulOptions u32, samDesired u32, phkResult voidptr) i32
 
-fn C.RegOpenKeyExW(hKey voidptr, lpSubKey &u16, ulOptions u32, samDesired u32, phkResult voidptr) int
+fn C.RegOpenKeyExW(hKey voidptr, lpSubKey &u16, ulOptions u32, samDesired u32, phkResult voidptr) i32
 
-fn C.RegSetValueEx() voidptr
+fn C.RegSetValueEx(hKey voidptr, lpValueName &u16, dwType u32, lpData &u16, cbData u32) i32
 
-fn C.RegSetValueExW(hKey voidptr, lpValueName &u16, Reserved u32, dwType u32, lpData &byte, lpcbData u32) int
+fn C.RegSetValueExW(hKey voidptr, lpValueName &u16, reserved u32, dwType u32, const_lpData &u8, cbData u32) i32
 
-fn C.RegCloseKey(hKey voidptr)
+fn C.RegCloseKey(hKey voidptr) i32
 
-fn C.RemoveDirectory(lpPathName &u16) int
+fn C.RemoveDirectory(lpPathName &u16) bool
 
-// fn C.GetStdHandle() voidptr
+fn C.RemoveDirectoryW(lpPathName &u16) bool
+
 fn C.GetStdHandle(u32) voidptr
 
-// fn C.SetConsoleMode()
-fn C.SetConsoleMode(voidptr, u32) int
+fn C.SetConsoleMode(voidptr, u32) bool
 
-// fn C.GetConsoleMode() int
-fn C.GetConsoleMode(voidptr, &u32) int
-
-[trusted]
-fn C.GetCurrentProcessId() int
-
-fn C.wprintf()
+fn C.GetConsoleMode(voidptr, &u32) bool
 
 // fn C.setbuf()
 fn C.setbuf(voidptr, &char)
 
 fn C.SymCleanup(hProcess voidptr)
 
-fn C.MultiByteToWideChar(codePage u32, dwFlags u32, lpMultiMyteStr &char, cbMultiByte int, lpWideCharStr &u16, cchWideChar int) int
+fn C.MultiByteToWideChar(codePage u32, dwFlags u32, lpMultiMyteStr &char, cbMultiByte i32, lpWideCharStr &u16,
+	cchWideChar i32) i32
 
-fn C.wcslen(str &u16) int
+fn C.wcslen(str voidptr) usize
 
-fn C.WideCharToMultiByte(codePage u32, dwFlags u32, lpWideCharStr &u16, cchWideChar int, lpMultiByteStr &char, cbMultiByte int, lpDefaultChar &char, lpUsedDefaultChar &int) int
+fn C.WideCharToMultiByte(codePage u32, dwFlags u32, lpWideCharStr &u16, cchWideChar i32, lpMultiByteStr &char,
+	cbMultiByte i32, lpDefaultChar &char, lpUsedDefaultChar &int) i32
 
-fn C._wstat(path &u16, buffer &C._stat) int
+fn C._wstat(path &u16, buffer &C._stat) i32
 
-fn C._wrename(oldname &u16, newname &u16) int
+fn C._wrename(oldname &u16, newname &u16) i32
 
 fn C._wfopen(filename &u16, mode &u16) voidptr
 
 fn C._wpopen(command &u16, mode &u16) voidptr
 
-fn C._pclose(stream &C.FILE) int
+fn C._pclose(stream &C.FILE) i32
 
-fn C._wsystem(command &u16) int
+fn C._wsystem(command &u16) i32
 
 fn C._wgetenv(varname &u16) voidptr
 
-fn C._putenv(envstring &char) int
+fn C._putenv(envstring &char) i32
+fn C._wputenv(envstring &u16) i32
 
-fn C._waccess(path &u16, mode int) int
+fn C._waccess(path &u16, mode i32) i32
 
-fn C._wremove(path &u16) int
+fn C._wremove(path &u16) i32
 
-fn C.ReadConsole(in_input_handle voidptr, out_buffer voidptr, in_chars_to_read u32, out_read_chars &u32, in_input_control voidptr) bool
+fn C.ReadConsole(in_input_handle voidptr, out_buffer voidptr, in_chars_to_read u32, out_read_chars &u32,
+	in_input_control voidptr) bool
 
 fn C.WriteConsole() voidptr
 
-fn C.WriteFile() voidptr
+fn C.WriteFile(hFile voidptr, lpBuffer &u8, nNumberOfBytesToWrite u32, lpNumberOfBytesWritten &u32, lpOverlapped voidptr) bool
 
-fn C._wchdir(dirname &u16)
+fn C._wchdir(dirname &u16) i32
 
-fn C._wgetcwd(buffer &u16, maxlen int) int
+fn C._wgetcwd(buffer &u16, maxlen i32) i32
 
-fn C._fullpath() int
+fn C._fullpath() i32
 
 fn C.GetFullPathName(voidptr, u32, voidptr, voidptr) u32
 
-[trusted]
+@[trusted]
 fn C.GetCommandLine() voidptr
 
-fn C.LocalFree()
+fn C.LocalFree(voidptr)
 
 fn C.FindFirstFileW(lpFileName &u16, lpFindFileData voidptr) voidptr
 
-fn C.FindFirstFile(lpFileName &byte, lpFindFileData voidptr) voidptr
+fn C.FindFirstFile(lpFileName &u8, lpFindFileData voidptr) voidptr
 
-fn C.FindNextFile(hFindFile voidptr, lpFindFileData voidptr) int
+fn C.FindNextFile(hFindFile voidptr, lpFindFileData voidptr) i32
 
 fn C.FindClose(hFindFile voidptr)
 
 // macro
-fn C.MAKELANGID(lgid voidptr, srtid voidptr) int
+fn C.MAKELANGID(lgid voidptr, srtid voidptr) i32
 
-fn C.FormatMessage(dwFlags u32, lpSource voidptr, dwMessageId u32, dwLanguageId u32, lpBuffer voidptr, nSize int, Arguments ...voidptr) voidptr
+fn C.FormatMessageW(dwFlags u32, lpSource voidptr, dwMessageId u32, dwLanguageId u32, lpBuffer voidptr,
+	nSize u32, arguments ...voidptr) u32
 
-fn C.CloseHandle(voidptr) int
+fn C.CloseHandle(voidptr) i32
 
-fn C.GetExitCodeProcess(hProcess voidptr, lpExitCode &u32)
+fn C.GetExitCodeProcess(hProcess voidptr, lpExitCode &C.DWORD) bool
 
-[trusted]
+@[trusted]
 fn C.GetTickCount() i64
 
-[trusted]
+@[trusted]
 fn C.Sleep(dwMilliseconds u32)
 
-fn C.WSAStartup(u16, &voidptr) int
+fn C.WSAStartup(u16, &voidptr) i32
 
-fn C.WSAGetLastError() int
+@[trusted]
+fn C.WSAGetLastError() i32
 
-fn C.closesocket(int) int
+fn C.closesocket(i32) i32
 
-fn C.vschannel_init(&C.TlsContext)
+fn C.vschannel_init(&C.TlsContext, C.BOOL)
 
-fn C.request(&C.TlsContext, int, &u16, &byte, &&byte) int
+fn C.request(&C.TlsContext, i32, &u16, &u8, u32, &&char, fn (voidptr, i64) voidptr) i32
 
 fn C.vschannel_cleanup(&C.TlsContext)
 
-fn C.URLDownloadToFile(int, &u16, &u16, int, int)
+fn C.URLDownloadToFile(i32, &u16, &u16, i32, i32)
 
+@[trusted]
 fn C.GetLastError() u32
 
-fn C.CreateDirectory(&byte, int) bool
+fn C.CreateDirectory(const_path &u16, security_attributes voidptr) bool
 
 // win crypto
-fn C.BCryptGenRandom(int, voidptr, int, int) int
+fn C.BCryptGenRandom(voidptr, voidptr, u32, u32) i32
 
 // win synchronization
-fn C.CreateMutex(int, bool, &byte) voidptr
+fn C.CreateMutex(i32, bool, &u8) voidptr
 
-fn C.WaitForSingleObject(voidptr, int) int
+fn C.WaitForSingleObject(voidptr, i32) i32
 
 fn C.ReleaseMutex(voidptr) bool
 
-fn C.CreateEvent(int, bool, bool, &byte) voidptr
+fn C.CreateEvent(i32, bool, bool, &u8) voidptr
 
-fn C.SetEvent(voidptr) int
+fn C.SetEvent(voidptr) i32
 
-fn C.CreateSemaphore(voidptr, int, int, voidptr) voidptr
+fn C.CreateSemaphore(voidptr, i32, i32, voidptr) voidptr
 
-fn C.ReleaseSemaphore(voidptr, int, voidptr) voidptr
+fn C.ReleaseSemaphore(voidptr, i32, voidptr) voidptr
 
-fn C.InitializeSRWLock(voidptr)
-
-fn C.AcquireSRWLockShared(voidptr)
-
-fn C.AcquireSRWLockExclusive(voidptr)
-
-fn C.ReleaseSRWLockShared(voidptr)
-
-fn C.ReleaseSRWLockExclusive(voidptr)
+$if windows {
+	fn C.InitializeSRWLock(voidptr)
+	fn C.AcquireSRWLockShared(voidptr)
+	fn C.AcquireSRWLockExclusive(voidptr)
+	fn C.ReleaseSRWLockShared(voidptr)
+	fn C.ReleaseSRWLockExclusive(voidptr)
+}
 
 // pthread.h
-fn C.pthread_mutex_init(voidptr, voidptr) int
+@[markused]
+fn C.pthread_self() usize
 
-fn C.pthread_mutex_lock(voidptr) int
+@[markused]
+fn C.pthread_create(thread voidptr, attr voidptr, start_routine voidptr, arg voidptr) i32
 
-fn C.pthread_mutex_unlock(voidptr) int
+@[markused]
+fn C.pthread_join(thread voidptr, retval voidptr) i32
 
-fn C.pthread_mutex_destroy(voidptr) int
+@[markused]
+fn C.pthread_attr_init(attr voidptr) i32
 
-fn C.pthread_rwlockattr_init(voidptr) int
+@[markused]
+fn C.pthread_attr_setstacksize(attr voidptr, stacksize usize) i32
 
-fn C.pthread_rwlockattr_setkind_np(voidptr, int) int
+@[markused]
+fn C.pthread_attr_destroy(attr voidptr) i32
 
-fn C.pthread_rwlockattr_setpshared(voidptr, int) int
+@[markused]
+fn C.pthread_mutex_init(voidptr, voidptr) i32
 
-fn C.pthread_rwlock_init(voidptr, voidptr) int
+@[markused]
+fn C.pthread_mutex_lock(voidptr) i32
 
-fn C.pthread_rwlock_rdlock(voidptr) int
+@[markused]
+fn C.pthread_mutex_unlock(voidptr) i32
 
-fn C.pthread_rwlock_wrlock(voidptr) int
+fn C.pthread_mutex_destroy(voidptr) i32
 
-fn C.pthread_rwlock_unlock(voidptr) int
+fn C.pthread_rwlockattr_init(voidptr) i32
 
-fn C.pthread_condattr_init(voidptr) int
+fn C.pthread_rwlockattr_setkind_np(voidptr, i32) i32
 
-fn C.pthread_condattr_setpshared(voidptr, int) int
+fn C.pthread_rwlockattr_setpshared(voidptr, i32) i32
 
-fn C.pthread_condattr_destroy(voidptr) int
+fn C.pthread_rwlock_init(voidptr, voidptr) i32
 
-fn C.pthread_cond_init(voidptr, voidptr) int
+fn C.pthread_rwlock_rdlock(voidptr) i32
 
-fn C.pthread_cond_signal(voidptr) int
+fn C.pthread_rwlock_wrlock(voidptr) i32
 
-fn C.pthread_cond_wait(voidptr, voidptr) int
+fn C.pthread_rwlock_unlock(voidptr) i32
 
-fn C.pthread_cond_timedwait(voidptr, voidptr, voidptr) int
+fn C.pthread_condattr_init(voidptr) i32
 
-fn C.pthread_cond_destroy(voidptr) int
+fn C.pthread_condattr_setpshared(voidptr, i32) i32
 
-fn C.sem_init(voidptr, int, u32) int
+fn C.pthread_condattr_destroy(voidptr) i32
 
-fn C.sem_post(voidptr) int
+fn C.pthread_cond_init(voidptr, voidptr) i32
 
-fn C.sem_wait(voidptr) int
+fn C.pthread_cond_signal(voidptr) i32
 
-fn C.sem_trywait(voidptr) int
+fn C.pthread_cond_wait(voidptr, voidptr) i32
 
-fn C.sem_timedwait(voidptr, voidptr) int
+fn C.pthread_cond_timedwait(voidptr, voidptr, voidptr) i32
 
-fn C.sem_destroy(voidptr) int
+fn C.pthread_cond_destroy(voidptr) i32
+
+fn C.sem_init(voidptr, i32, u32) i32
+
+fn C.sem_post(voidptr) i32
+
+fn C.sem_wait(voidptr) i32
+
+fn C.sem_trywait(voidptr) i32
+
+fn C.sem_timedwait(voidptr, voidptr) i32
+
+fn C.sem_destroy(voidptr) i32
 
 // MacOS semaphore functions
+@[trusted]
 fn C.dispatch_semaphore_create(i64) voidptr
 
 fn C.dispatch_semaphore_signal(voidptr) i64
 
 fn C.dispatch_semaphore_wait(voidptr, u64) i64
 
+@[trusted]
 fn C.dispatch_time(u64, i64) u64
 
 fn C.dispatch_release(voidptr)
 
 // file descriptor based reading/writing
-fn C.read(fd int, buf voidptr, count size_t) int
+fn C.read(fd i32, buf voidptr, count usize) i32
 
-fn C.write(fd int, buf voidptr, count size_t) int
+$if windows {
+	fn C.write(fd i32, const_buf voidptr, count u32) i32
+} $else {
+	fn C.write(fd i32, const_buf voidptr, count usize) isize
+}
 
-fn C.close(fd int) int
+fn C.close(fd i32) i32
 
 // pipes
-fn C.pipe(pipefds &int) int
+fn C.pipe(pipefds &i32) i32
 
-fn C.dup2(oldfd int, newfd int) int
+fn C.dup2(oldfd i32, newfd i32) i32
+
+@[markused]
+fn C.fcntl(fd i32, cmd i32, arg ...voidptr) i32
+
+fn C.execlp(file &char, arg &char, va ...voidptr) i32
+
+fn C._exit(code i32)
+
+@[markused]
+fn C.signal(sig i32, handler voidptr) voidptr
 
 // used by gl, stbi, freetype
 fn C.glTexImage2D()
 
 // used by ios for println
-fn C.WrappedNSLog(str &byte)
+fn C.WrappedNSLog(const_format &char, opt ...voidptr)
+
+// absolute value
+@[trusted]
+fn C.abs(number i32) i32
+
+$if windows {
+	fn C.GetDiskFreeSpaceExA(const_path &char, free_bytes_available_to_caller &C.ULARGE_INTEGER, total_number_of_bytes &C.ULARGE_INTEGER, total_number_of_free_bytes &C.ULARGE_INTEGER) bool
+
+	fn C.GetNativeSystemInfo(voidptr)
+
+	// C.SYSTEM_INFO contains information about the current computer system. This includes the architecture and type of the processor, the number of processors in the system, the page size, and other such information.
+	@[typedef]
+	pub struct C.SYSTEM_INFO {
+		// workaround: v doesn't support a truely C anon union/struct here
+		// union {
+		dwOemId u32
+		// struct {
+		wProcessorArchitecture u16
+		wReserved              u16
+		//	}
+		//}
+		dwPageSize                  u32
+		lpMinimumApplicationAddress voidptr
+		lpMaximumApplicationAddress voidptr
+		dwActiveProcessorMask       u32
+		dwNumberOfProcessors        u32
+		dwProcessorType             u32
+		dwAllocationGranularity     u32
+		wProcessorLevel             u16
+		wProcessorRevision          u16
+	}
+
+	fn C.GetSystemInfo(&C.SYSTEM_INFO)
+
+	@[typedef]
+	pub struct C.SRWLOCK {}
+}
+
+@[markused]
+fn C.sysconf(name i32) i32
+
+// Dependencies of the compiler's inline C runtime, not directly called by V code.
+@[markused]
+fn C.abort()
+
+@[markused]
+fn C.getenv(const_name &char) &char
+
+@[markused]
+fn C.pow(x f64, y f64) f64
+
+@[markused]
+fn C.fabs(x f64) f64
+
+@[markused]
+fn C.floor(x f64) f64
+
+@[markused]
+fn C.ceil(x f64) f64
+
+@[markused]
+fn C.__error() &i32
+
+@[markused]
+fn C.__errno() &i32
+
+@[markused]
+fn C.__errno_location() &i32
+
+@[markused]
+fn C._errno() &i32
+
+fn C._putenv_s(const_name &char, const_value &char) i32
+
+@[markused]
+fn C.___errno() &i32
+
+@[markused]
+fn C._errnop() &i32
+
+@[markused]
+fn C.__get_errno_ptr() &i32
+
+@[markused]
+fn C.pthread_equal(t1 voidptr, t2 voidptr) i32
+
+@[markused]
+fn C.pthread_key_create(key &usize, destructor voidptr) i32
+
+@[markused]
+fn C.pthread_getspecific(key usize) voidptr
+
+@[markused]
+fn C.pthread_setspecific(key usize, value voidptr) i32
+
+@[markused]
+fn C.pthread_once(control voidptr, init_routine voidptr) i32
+
+@[markused]
+fn C.pthread_attr_setdetachstate(attr voidptr, state i32) i32
+
+@[markused]
+fn C.pthread_detach(thread voidptr) i32
+
+fn C.clock() i64
+
+// The inline test statistics runtime uses this even when time is not imported.
+@[markused]
+fn C.clock_gettime(clock_id i32, tp voidptr) i32

@@ -1,51 +1,61 @@
 module time
 
-pub const (
-	days_string        = 'MonTueWedThuFriSatSun'
-	month_days         = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]
-	months_string      = 'JanFebMarAprMayJunJulAugSepOctNovDec'
-	// The unsigned zero year for internal calculations.
-	// Must be 1 mod 400, and times before it will not compute correctly,
-	// but otherwise can be changed at will.
-	absolute_zero_year = i64(-292277022399) // as i64
-	seconds_per_minute = 60
-	seconds_per_hour   = 60 * seconds_per_minute
-	seconds_per_day    = 24 * seconds_per_hour
-	seconds_per_week   = 7 * seconds_per_day
-	days_per_400_years = 365 * 400 + 97
-	days_per_100_years = 365 * 100 + 24
-	days_per_4_years   = 365 * 4 + 1
-	days_before        = [
-		0,
-		31,
-		31 + 28,
-		31 + 28 + 31,
-		31 + 28 + 31 + 30,
-		31 + 28 + 31 + 30 + 31,
-		31 + 28 + 31 + 30 + 31 + 30,
-		31 + 28 + 31 + 30 + 31 + 30 + 31,
-		31 + 28 + 31 + 30 + 31 + 30 + 31 + 31,
-		31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30,
-		31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31,
-		31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30,
-		31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
-	]
-	long_days          = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday',
-		'Sunday',
-	]
-)
+pub const days_string = 'MonTueWedThuFriSatSun'
+pub const long_days = ['Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday', 'Sunday']!
+pub const month_days = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31]!
+pub const months_string = 'JanFebMarAprMayJunJulAugSepOctNovDec'
+pub const long_months = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August',
+	'September', 'October', 'November', 'December']
+// The unsigned zero year for internal calculations.
+// Must be 1 mod 400, and times before it will not compute correctly,
+// but otherwise can be changed at will.
+pub const absolute_zero_year = i64(-292277022399)
+pub const seconds_per_minute = 60
+pub const seconds_per_hour = 60 * seconds_per_minute
+pub const seconds_per_day = 24 * seconds_per_hour
+pub const seconds_per_week = 7 * seconds_per_day
+pub const days_per_400_years = days_in_year * 400 + 97
+pub const days_per_100_years = days_in_year * 100 + 24
+pub const days_per_4_years = days_in_year * 4 + 1
+pub const days_in_year = 365
+pub const days_before = [
+	0,
+	31,
+	31 + 28,
+	31 + 28 + 31,
+	31 + 28 + 31 + 30,
+	31 + 28 + 31 + 30 + 31,
+	31 + 28 + 31 + 30 + 31 + 30,
+	31 + 28 + 31 + 30 + 31 + 30 + 31,
+	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31,
+	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30,
+	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31,
+	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30,
+	31 + 28 + 31 + 30 + 31 + 30 + 31 + 31 + 30 + 31 + 30 + 31,
+]!
 
 // Time contains various time units for a point in time.
+@[markused]
 pub struct Time {
+	unix i64
+	// loc uses nil so existing Time literals remain unzoned; V requires unsafe
+	// to initialize a reference field with that sentinel.
+	loc &Location = unsafe { nil }
 pub:
-	year        int
-	month       int
-	day         int
-	hour        int
-	minute      int
-	second      int
-	microsecond int
-	unix        i64
+	year       int
+	month      int
+	day        int
+	hour       int
+	minute     int
+	second     int
+	nanosecond int
+	is_local   bool // used to make time.now().local().local() == time.now().local()
+}
+
+@[inline]
+fn (t Time) has_location() bool {
+	// V requires unsafe to construct the nil reference used by loc's sentinel.
+	return t.loc != unsafe { nil }
 }
 
 // FormatDelimiter contains different time formats.
@@ -56,6 +66,7 @@ pub enum FormatTime {
 	hhmmss24
 	hhmmss24_milli
 	hhmmss24_micro
+	hhmmss24_nano
 	no_time
 }
 
@@ -83,141 +94,325 @@ pub enum FormatDelimiter {
 	no_delimiter
 }
 
-// smonth returns month name.
+fn check_new_time(t Time) ! {
+	month := if t.month == 0 { 1 } else { t.month }
+	day := if t.day == 0 { 1 } else { t.day }
+	if t.year < -9999 || t.year > 9999 {
+		return error('invalid time: year must be between -9999 and 9999')
+	}
+	if month < 1 || month > 12 {
+		return error('invalid time: month must be between 1 and 12')
+	}
+	max_day := month_days[month - 1] + if month == 2 && is_leap_year(t.year) {
+		1
+	} else {
+		0
+	}
+	if day < 1 || day > max_day {
+		return error('invalid time: day must be between 1 and ${max_day} for year ${t.year}, month ${month}')
+	}
+	if t.hour < 0 || t.hour > 23 {
+		return error('invalid time: hour must be between 0 and 23')
+	}
+	if t.minute < 0 || t.minute > 59 {
+		return error('invalid time: minute must be between 0 and 59')
+	}
+	if t.second < 0 || t.second > 59 {
+		return error('invalid time: second must be between 0 and 59')
+	}
+	if t.nanosecond < 0 || t.nanosecond >= 1_000_000_000 {
+		return error('invalid time: nanosecond must be between 0 and 999999999')
+	}
+}
+
+fn normalize_new_time(t Time) Time {
+	check_new_time(t) or { panic(err.msg()) }
+	return Time{
+		...t
+		month: if t.month == 0 { 1 } else { t.month }
+		day:   if t.day == 0 { 1 } else { t.day }
+	}
+}
+
+// new_checked is like `new`, but returns an error instead of panicking when
+// the fields do not form a valid date and time. The parse functions use it so
+// that malformed input, such as February 30th, is reported to the caller.
+fn new_checked(t Time) !Time {
+	check_new_time(t)!
+	return Time.new(t)
+}
+
+// Time.new returns a time struct with the calculated Unix time.
+pub fn Time.new(t Time) Time {
+	return time_with_unix(normalize_new_time(t))
+}
+
+// new returns a time struct with the calculated Unix time.
+pub fn new(t Time) Time {
+	return Time.new(t)
+}
+
+// smonth returns the month name abbreviation.
 pub fn (t Time) smonth() string {
 	if t.month <= 0 || t.month > 12 {
 		return '---'
 	}
 	i := t.month - 1
-	return time.months_string[i * 3..(i + 1) * 3]
+	return months_string[i * 3..(i + 1) * 3]
 }
 
-// unix_time returns Unix time.
-[inline]
-pub fn (t Time) unix_time() i64 {
-	return t.unix
+// unix returns the UNIX time with second resolution.
+@[inline]
+pub fn (t Time) unix() i64 {
+	if t.has_location() {
+		return t.unix
+	}
+	return time_with_unix(t.local_to_utc()).unix
 }
 
-// unix_time_milli returns Unix time with millisecond resolution.
-[inline]
-pub fn (t Time) unix_time_milli() i64 {
-	return t.unix * 1000 + (t.microsecond / 1000)
+// local_unix returns the UNIX local time with second resolution.
+// For IANA locations this is the absolute unix instant plus the zone offset
+// active at that instant (wall-clock seconds since epoch in that location).
+@[inline]
+pub fn (t Time) local_unix() i64 {
+	if t.has_location() {
+		loc := t.loc
+		// zone_at only fails for empty/corrupt locations; use the first zone
+		// offset rather than silently treating the instant as UTC.
+		zone_offset := loc.offset_at(t.unix) or {
+			if loc.zones.len > 0 {
+				loc.zones[0].offset
+			} else {
+				0
+			}
+		}
+		return t.unix + i64(zone_offset)
+	}
+	return time_with_unix(t).unix
 }
 
-// add returns a new time that duration is added
-pub fn (t Time) add(d Duration) Time {
-	microseconds := i64(t.unix) * 1_000_000 + t.microsecond + d.microseconds()
-	unix := microseconds / 1_000_000
-	micro := microseconds % 1_000_000
-	return unix2(unix, int(micro))
+// is_zero returns true when `t` is the zero value of `time.Time`.
+@[inline]
+pub fn (t Time) is_zero() bool {
+	return t.unix == 0 && t.year == 0 && t.month == 0 && t.day == 0 && t.hour == 0 && t.minute == 0
+		&& t.second == 0 && t.nanosecond == 0 && !t.is_local
+}
+
+// unix_milli returns the UNIX time with millisecond resolution.
+@[inline]
+pub fn (t Time) unix_milli() i64 {
+	return t.unix() * 1_000 + (i64(t.nanosecond) / 1_000_000)
+}
+
+// unix_micro returns the UNIX time with microsecond resolution.
+@[inline]
+pub fn (t Time) unix_micro() i64 {
+	return t.unix() * 1_000_000 + (i64(t.nanosecond) / 1_000)
+}
+
+// unix_nano returns the UNIX time with nanosecond resolution.
+@[inline]
+pub fn (t Time) unix_nano() i64 {
+	// TODO: use i128 here, when V supports it, since the following expression overflows for years like 3001:
+	return t.unix() * 1_000_000_000 + i64(t.nanosecond)
+}
+
+// add returns a new time with the given duration added.
+pub fn (t Time) add(duration_in_nanosecond Duration) Time {
+	// This expression overflows i64 for big years (and we do not have i128 yet):
+	// nanos := t.unix * 1_000_000_000 + i64(t.nanosecond) <-
+	// ... so instead, handle the addition manually in parts ¯\_(ツ)_/¯
+	mut increased_time_nanosecond := i64(t.nanosecond) + duration_in_nanosecond.nanoseconds()
+	// increased_time_second
+	base_unix := if t.has_location() { t.unix } else { t.local_unix() }
+	mut increased_time_second := base_unix + (increased_time_nanosecond / second)
+	increased_time_nanosecond = increased_time_nanosecond % second
+	if increased_time_nanosecond < 0 {
+		increased_time_second--
+		increased_time_nanosecond += second
+	}
+	res := unix_nanosecond(increased_time_second, int(increased_time_nanosecond))
+
+	if t.has_location() {
+		loc := t.loc
+		return loc.unix_nanosecond_to_local(res.unix, res.nanosecond) or {
+			// Keep the location even if projection fails so later operations
+			// still treat this value as an IANA-zoned instant.
+			Time{
+				...res
+				loc:  loc
+				unix: res.unix
+			}
+		}
+	}
+
+	if t.is_local {
+		// we need to reset unix to 0, because we don't know the offset
+		// and we can't calculate it without it without causing infinite recursion
+		// so unfortunately we need to recalculate unix next time it is needed
+		return Time{
+			...res
+			is_local: true
+			unix:     0
+		}
+	}
+
+	return res
 }
 
 // add_seconds returns a new time struct with an added number of seconds.
 pub fn (t Time) add_seconds(seconds int) Time {
-	return t.add(seconds * time.second)
+	return time_with_unix(t).add(i64(seconds) * second)
 }
 
 // add_days returns a new time struct with an added number of days.
 pub fn (t Time) add_days(days int) Time {
-	return t.add(days * 24 * time.hour)
+	return time_with_unix(t).add(i64(days) * 24 * hour)
 }
 
-// since returns a number of seconds elapsed since a given time.
-fn since(t Time) int {
-	// TODO Use time.Duration instead of seconds
-	return 0
+// since returns the time duration elapsed since a given time.
+pub fn since(t Time) Duration {
+	return now() - t
 }
 
 // relative returns a string representation of the difference between t
 // and the current time.
+//
+// Sample outputs:
+// ```
+// // future
+// now
+// in 5 minutes
+// in 1 day
+// on Feb 17
+// // past
+// 2 hours ago
+// last Jan 15
+// 5 years ago
+// ```
 pub fn (t Time) relative() string {
 	znow := now()
-	secs := znow.unix - t.unix
-	if secs <= 30 {
-		// right now or in the future
-		// TODO handle time in the future
+	mut secs := znow.unix() - t.unix()
+	mut prefix := ''
+	mut suffix := ''
+	if secs < 0 {
+		secs *= -1
+		prefix = 'in '
+	} else {
+		suffix = ' ago'
+	}
+	if secs < seconds_per_minute / 2 {
 		return 'now'
 	}
-	if secs < 60 {
-		return '1m'
-	}
-	if secs < 3600 {
-		m := secs / 60
+	if secs < seconds_per_hour {
+		m := secs / seconds_per_minute
 		if m == 1 {
-			return '1 minute ago'
+			return '${prefix}1 minute${suffix}'
 		}
-		return '$m minutes ago'
+		return '${prefix}${m} minutes${suffix}'
 	}
-	if secs < 3600 * 24 {
-		h := secs / 3600
+	if secs < seconds_per_hour * 24 {
+		h := secs / seconds_per_hour
 		if h == 1 {
-			return '1 hour ago'
+			return '${prefix}1 hour${suffix}'
 		}
-		return '$h hours ago'
+		return '${prefix}${h} hours${suffix}'
 	}
-	if secs < 3600 * 24 * 5 {
-		d := secs / 3600 / 24
+	if secs < seconds_per_hour * 24 * 7 {
+		d := secs / seconds_per_hour / 24
 		if d == 1 {
-			return '1 day ago'
+			return '${prefix}1 day${suffix}'
 		}
-		return '$d days ago'
+		return '${prefix}${d} days${suffix}'
 	}
-	if secs > 3600 * 24 * 10000 {
-		return ''
+	if secs < seconds_per_hour * 24 * days_in_year {
+		if prefix == 'in ' {
+			return 'on ${t.md()}'
+		}
+		return 'last ${t.md()}'
 	}
-	return t.md()
+	y := secs / seconds_per_hour / 24 / days_in_year
+	if y == 1 {
+		return '${prefix}1 year${suffix}'
+	}
+	return '${prefix}${y} years${suffix}'
 }
 
-// relative_short returns a string saying how long ago a time occured as follows:
+// relative_short returns a string saying how long ago a time occurred as follows:
 // 0-30 seconds: `"now"`; 30-60 seconds: `"1m"`; anything else is rounded to the
-// nearest minute, hour or day; anything higher than 10000 days (about 27 years)
-// years returns an empty string.
-// Some Examples:
-// `0s -> 'now'`;
-// `20s -> 'now'`;
-// `47s -> '1m'`;
-// `456s -> '7m'`;
-// `1234s -> '20m'`;
-// `16834s -> '4h'`;
-// `1687440s -> '33d'`;
-// `15842354871s -> ''`
+// nearest minute, hour, day, or year
+//
+// Sample outputs:
+// ```
+// // future
+// now
+// in 5m
+// in 1d
+// // past
+// 2h ago
+// 5y ago
+// ```
 pub fn (t Time) relative_short() string {
 	znow := now()
-	secs := znow.unix - t.unix
-	if secs <= 30 {
-		// right now or in the future
-		// TODO handle time in the future
+	mut secs := znow.unix() - t.unix()
+	mut prefix := ''
+	mut suffix := ''
+	if secs < 0 {
+		secs *= -1
+		prefix = 'in '
+	} else {
+		suffix = ' ago'
+	}
+	if secs < seconds_per_minute / 2 {
 		return 'now'
 	}
-	if secs < 60 {
-		return '1m'
+	if secs < seconds_per_hour {
+		m := secs / seconds_per_minute
+		if m == 1 {
+			return '${prefix}1m${suffix}'
+		}
+		return '${prefix}${m}m${suffix}'
 	}
-	if secs < 3600 {
-		return '${secs / 60}m'
+	if secs < seconds_per_hour * 24 {
+		h := secs / seconds_per_hour
+		if h == 1 {
+			return '${prefix}1h${suffix}'
+		}
+		return '${prefix}${h}h${suffix}'
 	}
-	if secs < 3600 * 24 {
-		return '${secs / 3600}h'
+	if secs < seconds_per_hour * 24 * days_in_year {
+		d := secs / seconds_per_hour / 24
+		if d == 1 {
+			return '${prefix}1d${suffix}'
+		}
+		return '${prefix}${d}d${suffix}'
 	}
-	if secs < 3600 * 24 * 5 {
-		return '${secs / 3600 / 24}d'
+	y := secs / seconds_per_hour / 24 / days_in_year
+	if y == 1 {
+		return '${prefix}1y${suffix}'
 	}
-	if secs > 3600 * 24 * 10000 {
-		return ''
-	}
-	return t.md()
+	return '${prefix}${y}y${suffix}'
 }
 
-// day_of_week returns the current day of a given year, month, and day,
-// as an integer.
+// sakamoto_month_offsets is Sakamoto's day-of-week lookup table.
+// A fixed array avoids a heap allocation on every call.
+const sakamoto_month_offsets = [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]!
+
+// day_of_week returns the current day of a given year, month, and day, as an integer.
+// The result is from 1 (Monday) to 7 (Sunday), also for the years before 1 of the
+// proleptic Gregorian calendar, where the year 0 is 1 BC.
 pub fn day_of_week(y int, m int, d int) int {
-	// Sakomotho's algorithm is explained here:
-	// https://stackoverflow.com/a/6385934
-	t := [0, 3, 2, 5, 0, 3, 5, 1, 4, 6, 2, 4]
 	mut sy := y
 	if m < 3 {
 		sy = sy - 1
 	}
-	return (sy + sy / 4 - sy / 100 + sy / 400 + t[m - 1] + d - 1) % 7 + 1
+	if sy < 0 {
+		// The formula needs floored divisions and a floored remainder, but `/` and `%`
+		// truncate toward zero. The Gregorian calendar repeats every 400 years (146097
+		// days, which is 20871 whole weeks), so use the same year of a later cycle.
+		sy = sy % 400 + 400
+	}
+	return (sy + sy / 4 - sy / 100 + sy / 400 + sakamoto_month_offsets[iclamp(0, m - 1, 11)] + d - 1) % 7 + 1
 }
 
 // day_of_week returns the current day as an integer.
@@ -225,92 +420,138 @@ pub fn (t Time) day_of_week() int {
 	return day_of_week(t.year, t.month, t.day)
 }
 
-// weekday_str returns the current day as a string.
-pub fn (t Time) weekday_str() string {
-	i := t.day_of_week() - 1
-	return time.days_string[i * 3..(i + 1) * 3]
+// week_of_year returns the current week of year as an integer.
+// follow ISO 8601 standard
+pub fn (t Time) week_of_year() int {
+	// ISO 8601 Week of Year Rules:
+	// --------------------------------------------
+	// 1. Week Definition:
+	//    - A week starts on ​**Monday**​ (Day 1) and ends on ​**Sunday**​ (Day 7).
+	// 2. First Week of the Year:
+	//    - The first week is the one containing the year's ​**first Thursday**.
+	//    - Equivalently, the week with January 4th always belongs to Week 1.
+	// 3. Year Assignment:
+	//    - Dates in December/January may belong to the previous/next ISO year,
+	//      depending on the week's Thursday.
+	// 4. Week Number Format:
+	//    - Expressed as `YYYY-Www` (e.g., `2026-W01` for the first week of 2026).
+	// --------------------------------------------
+	// Algorithm Steps:
+	// 1. Find the Thursday of the current week:
+	//    - If date is Monday-Wednesday, add days to reach Thursday.
+	//    - If date is Thursday-Sunday, subtract days to reach Thursday.
+	// 2. The ISO year is the calendar year of this Thursday.
+	// 3. Compute the week number as:
+	//    week_number = (thursday's day_of_year - 1) / 7 + 1
+	dow := t.day_of_week()
+	days_to_thursday := 4 - dow
+	// Shift calendar dates rather than absolute 24-hour periods, which can cross
+	// a zone transition without reaching the intended local Thursday.
+	thursday_date := date_from_days_after_unix_epoch(t.days_from_unix_epoch() + days_to_thursday)
+	thursday_day_of_year := thursday_date.year_day()
+	week_number := (thursday_day_of_year - 1) / 7 + 1
+	return week_number
 }
 
-// weekday_str returns the current day as a string.
+// year_day returns the current day of the year as an integer.
+// See also #Time.custom_format .
+pub fn (t Time) year_day() int {
+	yday := t.day + days_before[iclamp(0, t.month - 1, 12)]
+	if is_leap_year(t.year) && t.month > 2 {
+		return yday + 1
+	}
+	return yday
+}
+
+// weekday_str returns the current day as a string 3 letter abbreviation.
+pub fn (t Time) weekday_str() string {
+	i := t.day_of_week() - 1
+	return long_days[iclamp(0, i, 6)][0..3]
+}
+
+// long_weekday_str returns the current day as a string.
 pub fn (t Time) long_weekday_str() string {
 	i := t.day_of_week() - 1
-	return time.long_days[i]
+	return long_days[iclamp(0, i, 6)]
 }
 
 // is_leap_year checks if a given a year is a leap year.
 pub fn is_leap_year(year int) bool {
-	return (year % 4 == 0) && (year % 100 != 0 || year % 400 == 0)
+	return year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
 }
 
 // days_in_month returns a number of days in a given month.
-pub fn days_in_month(month int, year int) ?int {
+pub fn days_in_month(month int, year int) !int {
 	if month > 12 || month < 1 {
-		return error('Invalid month: $month')
+		return error('Invalid month: ${month}')
 	}
 	extra := if month == 2 && is_leap_year(year) { 1 } else { 0 }
-	res := time.month_days[month - 1] + extra
+	res := month_days[month - 1] + extra
 	return res
 }
 
-// str returns time in the same format as `parse` expects ("YYYY-MM-DD HH:MM:SS").
+// debug returns detailed breakdown of time (`Time{ year: YYYY month: MM day: dd hour: HH: minute: mm second: ss nanosecond: nanos unix: unix is_local: false }`).
 pub fn (t Time) debug() string {
-	return 'Time{ year: ${t.year:04} month: ${t.month:02} day: ${t.day:02} hour: ${t.hour:02} minute: ${t.minute:02} second: ${t.second:02} microsecond: ${t.microsecond:06} unix: ${t.unix:07} }'
-}
-
-// A lot of these are taken from the Go library.
-pub type Duration = i64
-
-pub const (
-	nanosecond  = Duration(1)
-	microsecond = Duration(1000 * nanosecond)
-	millisecond = Duration(1000 * microsecond)
-	second      = Duration(1000 * millisecond)
-	minute      = Duration(60 * second)
-	hour        = Duration(60 * minute)
-	infinite    = Duration(C.INT64_MAX)
-)
-
-// nanoseconds returns the duration as an integer number of nanoseconds.
-pub fn (d Duration) nanoseconds() i64 {
-	return i64(d)
-}
-
-// microseconds returns the duration as an integer number of microseconds.
-pub fn (d Duration) microseconds() i64 {
-	return i64(d) / 1000
-}
-
-// milliseconds returns the duration as an integer number of milliseconds.
-pub fn (d Duration) milliseconds() i64 {
-	return i64(d) / 1000000
-}
-
-// The following functions return floating point numbers because it's common to
-// consider all of them in sub-one intervals
-// seconds returns the duration as a floating point number of seconds.
-pub fn (d Duration) seconds() f64 {
-	sec := d / time.second
-	nsec := d % time.second
-	return f64(sec) + f64(nsec) / 1e9
-}
-
-// minutes returns the duration as a floating point number of minutes.
-pub fn (d Duration) minutes() f64 {
-	min := d / time.minute
-	nsec := d % time.minute
-	return f64(min) + f64(nsec) / (60 * 1e9)
-}
-
-// hours returns the duration as a floating point number of hours.
-pub fn (d Duration) hours() f64 {
-	hr := d / time.hour
-	nsec := d % time.hour
-	return f64(hr) + f64(nsec) / (60 * 60 * 1e9)
+	return 'Time{ year: ${t.year:04} month: ${t.month:02} day: ${t.day:02} hour: ${t.hour:02} minute: ${t.minute:02} second: ${t.second:02} nanosecond: ${t.nanosecond:09} unix: ${t.unix:07} is_local: ${t.is_local} }'
 }
 
 // offset returns time zone UTC offset in seconds.
 pub fn offset() int {
-	t := now()
+	t := utc()
 	local := t.local()
 	return int(local.unix - t.unix)
+}
+
+// local_to_utc converts the receiver `t` to the corresponding UTC time, if it contains local time.
+// If the receiver already does contain UTC time, it returns it unchanged.
+pub fn (t Time) local_to_utc() Time {
+	if t.has_location() {
+		return unix_nanosecond(t.unix, t.nanosecond)
+	}
+	if !t.is_local {
+		return t
+	}
+	return Time{
+		...t.add(i64(-offset()) * second)
+		is_local: false
+	}
+}
+
+// utc_to_local converts the receiver `u` to the corresponding local time, if it contains UTC time.
+// If the receiver already does contain local time, it returns it unchanged.
+pub fn (u Time) utc_to_local() Time {
+	if u.has_location() {
+		return u
+	}
+	if u.is_local {
+		return u
+	}
+	return Time{
+		...u.add(i64(offset()) * second)
+		is_local: true
+	}
+}
+
+// as_local returns the exact same time, as the receiver `t`, but with its .is_local field set to true.
+// See also #Time.utc_to_local .
+pub fn (t Time) as_local() Time {
+	return Time{
+		...t
+		is_local: true
+	}
+}
+
+// as_utc returns the exact same time, as the receiver `t`, but with its .is_local field set to false.
+// See also #Time.local_to_utc .
+pub fn (t Time) as_utc() Time {
+	return Time{
+		...t
+		is_local: false
+	}
+}
+
+// is_utc returns true, when the receiver `t` is a UTC time, and false otherwise.
+// See also #Time.utc_to_local .
+pub fn (t Time) is_utc() bool {
+	return !t.is_local && t.location() == none
 }

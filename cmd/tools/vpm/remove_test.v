@@ -1,0 +1,25 @@
+// vtest build: network?
+// vtest retry: 3
+import os
+import rand
+import test_utils
+
+const vexe = @VEXE
+const test_path = os.join_path(os.vtmp_dir(), 'vpm_remove_test_${rand.ulid()}')
+
+fn testsuite_begin() {
+	dump(test_path)
+	test_utils.set_test_env(test_path)
+}
+
+fn testsuite_end() {
+	os.rmdir_all(test_path) or {}
+}
+
+fn test_remove() {
+	os.exec_or_exit([@VEXE, 'install', 'https://github.com/hungrybluedev/xlsx'])
+	mod_path := os.join_path(test_path, 'xlsx')
+	assert os.is_dir(mod_path)
+	res := os.exec([@VEXE, 'remove', 'xlsx'])
+	assert !os.exists(mod_path)
+}

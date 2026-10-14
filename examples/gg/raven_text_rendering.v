@@ -1,18 +1,14 @@
 module main
 
 import gg
-import gx
-import os
+import os.asset
 import math
 
-const (
-	win_width  = 600
-	win_height = 700
-	bg_color   = gx.white
-)
+const win_width = 600
+const win_height = 700
+const bg_color = gg.white
 
-const (
-	text = '
+const text = '
 Once upon a midnight dreary, while I pondered, weak and weary,
 Over many a quaint and curious volume of forgotten lore—
     While I nodded, nearly napping, suddenly there came a tapping,
@@ -55,31 +51,26 @@ Soon again I heard a tapping somewhat louder than before.
 Let my heart be still a moment and this mystery explore;—
             ’Tis the wind and nothing more!”
 '
-	lines = text.split('\n')
-)
+
+const lines = text.split('\n')
 
 struct App {
 mut:
-	gg &gg.Context
+	gg &gg.Context = unsafe { nil }
 }
 
 fn main() {
-	mut app := &App{
-		gg: 0
-	}
-	mut font_path := os.resource_abs_path(os.join_path('..', 'assets', 'fonts', 'RobotoMono-Regular.ttf'))
-	$if android {
-		font_path = 'fonts/RobotoMono-Regular.ttf'
-	}
+	mut app := &App{}
 	app.gg = gg.new_context(
-		width: win_width
-		height: win_height
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'Empty window'
-		user_data: app
-		bg_color: bg_color
-		frame_fn: frame
-		font_path: font_path // window_user_ptr: ctx
+		window_title:  'Raven text'
+		user_data:     app
+		bg_color:      bg_color
+		frame_fn:      frame
+		font_path:     asset.get_path('../assets', 'fonts/RobotoMono-Regular.ttf')
+		// window_user_ptr: ctx
 		// native_rendering: true
 	)
 	app.gg.run()
@@ -92,7 +83,7 @@ fn frame(mut app App) {
 	if scale_factor <= 0 {
 		scale_factor = 1
 	}
-	text_cfg := gx.TextCfg{
+	text_cfg := gg.TextCfg{
 		size: 16 * int(scale_factor)
 	}
 	mut y := 10

@@ -1,0 +1,111 @@
+vlib/v/checker/tests/overflow_int_signed_err.vv:4:2: warning: value `0xff` overflows `i8`, this will be considered hard error soon
+    2 | // integer_cast_platform_width_test.v.
+    3 | const _i8s = [
+    4 |     i8(0xff), // converted to -1
+      |     ~~~~~~~~
+    5 |     i8(128), // converted to -128
+    6 |     i8(-129), // converted to +127
+vlib/v/checker/tests/overflow_int_signed_err.vv:5:2: warning: value `128` overflows `i8`, this will be considered hard error soon
+    3 | const _i8s = [
+    4 |     i8(0xff), // converted to -1
+    5 |     i8(128), // converted to -128
+      |     ~~~~~~~
+    6 |     i8(-129), // converted to +127
+    7 |     i8(-0xff), // converted to +1
+vlib/v/checker/tests/overflow_int_signed_err.vv:6:2: warning: value `-129` overflows `i8`, this will be considered hard error soon
+    4 |     i8(0xff), // converted to -1
+    5 |     i8(128), // converted to -128
+    6 |     i8(-129), // converted to +127
+      |     ~~~~~~~~
+    7 |     i8(-0xff), // converted to +1
+    8 | ]
+vlib/v/checker/tests/overflow_int_signed_err.vv:7:2: warning: value `-0xff` overflows `i8`, this will be considered hard error soon
+    5 |     i8(128), // converted to -128
+    6 |     i8(-129), // converted to +127
+    7 |     i8(-0xff), // converted to +1
+      |     ~~~~~~~~~
+    8 | ]
+    9 |
+vlib/v/checker/tests/overflow_int_signed_err.vv:11:2: warning: value `0xffff` overflows `i16`, this will be considered hard error soon
+    9 |
+   10 | const _i16s = [
+   11 |     i16(0xffff), // converted to -1
+      |     ~~~~~~~~~~~
+   12 |     i16(32768), // converted to -32768
+   13 |     i16(-32769), // converted to +32767
+vlib/v/checker/tests/overflow_int_signed_err.vv:12:2: warning: value `32768` overflows `i16`, this will be considered hard error soon
+   10 | const _i16s = [
+   11 |     i16(0xffff), // converted to -1
+   12 |     i16(32768), // converted to -32768
+      |     ~~~~~~~~~~
+   13 |     i16(-32769), // converted to +32767
+   14 |     i16(-0xffff), // converted to +1
+vlib/v/checker/tests/overflow_int_signed_err.vv:13:2: warning: value `-32769` overflows `i16`, this will be considered hard error soon
+   11 |     i16(0xffff), // converted to -1
+   12 |     i16(32768), // converted to -32768
+   13 |     i16(-32769), // converted to +32767
+      |     ~~~~~~~~~~~
+   14 |     i16(-0xffff), // converted to +1
+   15 | ]
+vlib/v/checker/tests/overflow_int_signed_err.vv:14:2: warning: value `-0xffff` overflows `i16`, this will be considered hard error soon
+   12 |     i16(32768), // converted to -32768
+   13 |     i16(-32769), // converted to +32767
+   14 |     i16(-0xffff), // converted to +1
+      |     ~~~~~~~~~~~~
+   15 | ]
+   16 |
+vlib/v/checker/tests/overflow_int_signed_err.vv:18:2: warning: value `0xffffffff` overflows `i32`, this will be considered hard error soon
+   16 |
+   17 | const _i32s = [
+   18 |     i32(0xffffffff), // converted to -1
+      |     ~~~~~~~~~~~~~~~
+   19 |     i32(2147483648), // converted to -2147483648
+   20 |     i32(-2147483649), // converted to +2147483647
+vlib/v/checker/tests/overflow_int_signed_err.vv:19:2: warning: value `2147483648` overflows `i32`, this will be considered hard error soon
+   17 | const _i32s = [
+   18 |     i32(0xffffffff), // converted to -1
+   19 |     i32(2147483648), // converted to -2147483648
+      |     ~~~~~~~~~~~~~~~
+   20 |     i32(-2147483649), // converted to +2147483647
+   21 |     i32(-0xffffffff), // converted to +1
+vlib/v/checker/tests/overflow_int_signed_err.vv:20:2: warning: value `-2147483649` overflows `i32`, this will be considered hard error soon
+   18 |     i32(0xffffffff), // converted to -1
+   19 |     i32(2147483648), // converted to -2147483648
+   20 |     i32(-2147483649), // converted to +2147483647
+      |     ~~~~~~~~~~~~~~~~
+   21 |     i32(-0xffffffff), // converted to +1
+   22 | ]
+vlib/v/checker/tests/overflow_int_signed_err.vv:21:2: warning: value `-0xffffffff` overflows `i32`, this will be considered hard error soon
+   19 |     i32(2147483648), // converted to -2147483648
+   20 |     i32(-2147483649), // converted to +2147483647
+   21 |     i32(-0xffffffff), // converted to +1
+      |     ~~~~~~~~~~~~~~~~
+   22 | ]
+   23 |
+vlib/v/checker/tests/overflow_int_signed_err.vv:25:2: warning: value `0xffffffffffffffff` overflows `i64`, this will be considered hard error soon
+   23 |
+   24 | const _i64s = [
+   25 |     i64(0xffffffffffffffff), // converted to -1
+      |     ~~~~~~~~~~~~~~~~~~~~~~~
+   26 |     i64(9223372036854775808), // converted to -9223372036854775808
+   27 |     i64(-9223372036854775809), // converted to +9223372036854775807
+vlib/v/checker/tests/overflow_int_signed_err.vv:26:2: warning: value `9223372036854775808` overflows `i64`, this will be considered hard error soon
+   24 | const _i64s = [
+   25 |     i64(0xffffffffffffffff), // converted to -1
+   26 |     i64(9223372036854775808), // converted to -9223372036854775808
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~
+   27 |     i64(-9223372036854775809), // converted to +9223372036854775807
+   28 |     i64(-0xffffffffffffffff), // converted to +1
+vlib/v/checker/tests/overflow_int_signed_err.vv:27:2: warning: value `-9223372036854775809` overflows `i64`, this will be considered hard error soon
+   25 |     i64(0xffffffffffffffff), // converted to -1
+   26 |     i64(9223372036854775808), // converted to -9223372036854775808
+   27 |     i64(-9223372036854775809), // converted to +9223372036854775807
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~~
+   28 |     i64(-0xffffffffffffffff), // converted to +1
+   29 | ]
+vlib/v/checker/tests/overflow_int_signed_err.vv:28:2: warning: value `-0xffffffffffffffff` overflows `i64`, this will be considered hard error soon
+   26 |     i64(9223372036854775808), // converted to -9223372036854775808
+   27 |     i64(-9223372036854775809), // converted to +9223372036854775807
+   28 |     i64(-0xffffffffffffffff), // converted to +1
+      |     ~~~~~~~~~~~~~~~~~~~~~~~~
+   29 | ]

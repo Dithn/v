@@ -12,10 +12,10 @@ fn test_utf8_wide_char() {
 	}
 	r := `✔`
 	s := '✔'
-	println('r: $r')
-	println('s: $s')
+	println('r: ${r}')
+	println('s: ${s}')
 	rstr := r.str()
-	println('rstr: $rstr')
+	println('rstr: ${rstr}')
 	assert utf8_char_len(r) == 1
 	assert utf8_char_len(s[0]) == 3
 	assert s == rstr
@@ -25,4 +25,201 @@ fn test_utf8_wide_char() {
 		assert val[1].hex() == '9c'
 		assert val[2].hex() == '94'
 	}
+}
+
+fn test_to_wide_latin() {
+	s := 'abc 123'
+	w := s.to_wide()
+	unsafe {
+		assert w[0] == 97
+		assert w[1] == 98
+		assert w[2] == 99
+		assert w[3] == 32
+		assert w[4] == 49
+		assert w[5] == 50
+		assert w[6] == 51
+		assert w[7] == 0
+	}
+}
+
+fn test_to_wide_cyrillic() {
+	s := 'Проба'
+	w := s.to_wide()
+	unsafe {
+		assert w[0] == 1055
+		assert w[1] == 1088
+		assert w[2] == 1086
+		assert w[3] == 1073
+		assert w[4] == 1072
+		assert w[5] == 0
+	}
+}
+
+const little_serial_number = [u8(67), 0, 76, 0, 52, 0, 54, 0, 73, 0, 49, 0, 65, 0, 48, 0, 48, 0,
+	54, 0, 52, 0, 57, 0, 0, 0, 0]
+const big_serial_number = [u8(0), 67, 0, 76, 0, 52, 0, 54, 0, 73, 0, 49, 0, 65, 0, 48, 0, 48, 0,
+	54, 0, 52, 0, 57, 0, 0, 0, 0]
+
+const swide_serial_number = 'CL46I1A00649'
+
+fn test_string_from_wide() {
+	$if little_endian {
+		z := unsafe { string_from_wide(little_serial_number.data) }
+		assert z == swide_serial_number
+	} $else {
+		z := unsafe { string_from_wide(big_serial_number.data) }
+		assert z == swide_serial_number
+	}
+}
+
+fn test_string_from_wide2() {
+	$if little_endian {
+		z := unsafe { string_from_wide2(little_serial_number.data, 12) }
+		assert z == swide_serial_number
+	} $else {
+		z := unsafe { string_from_wide2(big_serial_number.data, 12) }
+		assert z == swide_serial_number
+	}
+}
+
+fn test_wtf8_roundtrips_unpaired_windows_surrogates() {
+	wide := [u16(`a`), 0xd800, u16(`b`), 0xdc00, 0xd83d, 0xde00]
+	encoded := unsafe { wtf8_from_wide(wide.data, wide.len) }
+	assert encoded.bytes() == [u8(`a`), 0xed, 0xa0, 0x80, u8(`b`), 0xed, 0xb0, 0x80, 0xf0, 0x9f,
+		0x98, 0x80]
+	decoded := wtf8_to_wide(encoded)
+	unsafe {
+		for i, unit in wide {
+			assert decoded[i] == unit
+		}
+		assert decoded[wide.len] == 0
+		free(decoded)
+	}
+}
+
+fn test_reverse_cyrillic_with_string_from_wide() {
+	s := 'Проба'
+	ws := s.to_wide()
+	z := unsafe { string_from_wide(ws) }
+	assert z == s
+}
+
+fn test_wide_to_ansi() {
+	ws := 'abc'.to_wide()
+	assert wide_to_ansi(ws) == [u8(97), 98, 99, 0]
+}
+
+fn test_string_to_ansi_not_null_terminated() {
+	assert string_to_ansi_not_null_terminated('abc') == [u8(97), 98, 99]
+}
+
+fn test_utf8_str_visible_length() {
+	assert utf8_str_visible_length('𝐀𝐁𝐂') == 3
+	assert utf8_str_visible_length('\u006E\u0303') == 1
+	assert utf8_str_visible_length('\U0001F3F3\uFE0F\u200D\U0001F308') == 2
+	assert utf8_str_visible_length('ห์') == 1
+	assert utf8_str_visible_length('ปีเตอร์') == 5
+	assert utf8_str_visible_length('👩🏽‍💻') == 2
+}
+
+fn utf8_bytes_to_utf32(bytes []u8) rune {
+	// The decoder takes a raw byte pointer; the slice keeps that storage alive.
+	return unsafe { impl_utf8_to_utf32(&u8(bytes.data), bytes.len) }
+}
+
+fn test_utf8_to_utf32_cases() {
+	test_case1 := 'A'.bytes()
+	assert utf8_bytes_to_utf32(test_case1) == rune(`A`)
+
+	test_case2 := 'é'.bytes()
+	assert utf8_bytes_to_utf32(test_case2) == rune(`é`)
+
+	test_case3 := '€'.bytes()
+	assert utf8_bytes_to_utf32(test_case3) == rune(`€`)
+
+	test_case4 := '𐍈'.bytes()
+	assert utf8_bytes_to_utf32(test_case4) == rune(0x10348)
+	assert utf8_bytes_to_utf32(test_case4) == rune(`𐍈`)
+
+	test_case5 := '中'.bytes()
+	assert utf8_bytes_to_utf32(test_case5) == rune(0x4E2D)
+	assert utf8_bytes_to_utf32(test_case5) == rune(`中`)
+
+	// emoji, 4-byte UTF-8
+	test_case6 := '😀'.bytes()
+	assert utf8_bytes_to_utf32(test_case6) == rune(0x1F600)
+	assert utf8_bytes_to_utf32(test_case6) == `😀`
+
+	test_case7 := 'Ж'.bytes()
+	assert utf8_bytes_to_utf32(test_case7) == rune(`Ж`)
+
+	test_case8 := 'م'.bytes()
+	assert utf8_bytes_to_utf32(test_case8) == rune(`م`)
+
+	test_case9 := '߿'.bytes()
+	assert utf8_bytes_to_utf32(test_case9) == rune(0x07FF)
+	assert utf8_bytes_to_utf32(test_case9) == rune(`߿`)
+
+	test_case10 := 'ࠀ'.bytes()
+	assert utf8_bytes_to_utf32(test_case10) == rune(0x0800)
+	assert utf8_bytes_to_utf32(test_case10) == rune(`ࠀ`)
+
+	test_case11 := '￿'.bytes()
+	assert utf8_bytes_to_utf32(test_case11) == rune(0xFFFF)
+	assert utf8_bytes_to_utf32(test_case11) == rune(`￿`)
+
+	test_case12 := '𐀀'.bytes()
+	assert utf8_bytes_to_utf32(test_case12) == rune(0x10000)
+	assert utf8_bytes_to_utf32(test_case12) == rune(`𐀀`)
+
+	test_case13 := '􏿿'.bytes()
+	assert utf8_bytes_to_utf32(test_case13) == rune(0x10FFFF)
+	assert utf8_bytes_to_utf32(test_case13) == rune(`􏿿`)
+}
+
+fn test_utf8_to_utf32_invalid_length() {
+	// More than 4 bytes is invalid
+	invalid := [u8(0xF0), 0x9F, 0x98, 0x80, 0x00]
+	assert utf8_bytes_to_utf32(invalid) == 0
+}
+
+fn test_utf8_to_utf32_invalid_sequences() {
+	replacement := rune(0xfffd)
+	overlong := [u8(0xc1), 0xa1]
+	surrogate := [u8(0xed), 0xa0, 0x80]
+	above_max := [u8(0xf4), 0x90, 0x80, 0x80]
+	incomplete := [u8(0xc3)]
+	lone_continuation := [u8(0x80)]
+
+	assert utf8_bytes_to_utf32(overlong) == replacement
+	assert utf8_bytes_to_utf32(surrogate) == replacement
+	assert utf8_bytes_to_utf32(above_max) == replacement
+	assert utf8_bytes_to_utf32(incomplete) == replacement
+	assert utf8_bytes_to_utf32(lone_continuation) == replacement
+}
+
+fn test_invalid_utf8_string_runes_use_replacement_character() {
+	replacement := rune(0xfffd)
+	invalid := [u8(0xc1), 0xa1, `-`, 0xed, 0xa0, 0x80, `-`, 0xc3].bytestr()
+	expected := [
+		replacement,
+		replacement,
+		rune(`-`),
+		replacement,
+		replacement,
+		replacement,
+		rune(`-`),
+		replacement,
+	]
+
+	assert invalid.runes() == expected
+	mut iterated := []rune{}
+	for r in invalid.runes_iterator() {
+		iterated << r
+	}
+	assert iterated == expected
+}
+
+fn test_utf8_to_utf32_empty() {
+	assert utf8_bytes_to_utf32([]u8{}) == 0
 }

@@ -1,14 +1,12 @@
 // hanoi tower
-const (
-	num = 7
-)
+const num = 7
 
 fn main() {
 	hanoi(num, 'A', 'B', 'C')
 }
 
 fn move(n int, a string, b string) {
-	println('Disc $n from $a to ${b}...')
+	println('Disc ${n} from ${a} to ${b}...')
 }
 
 fn hanoi(n int, a string, b string, c string) {

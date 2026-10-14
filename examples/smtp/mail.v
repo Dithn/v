@@ -1,3 +1,4 @@
+// vtest build: present_openssl?
 // Creator: nedimf (07/2020)
 import os
 import net.smtp
@@ -11,6 +12,8 @@ fn main() {
 	println('')
 	mailserver := os.input('Mail server: ')
 	mailport := os.input('Mail server port: ').int()
+	tls_mode := os.input('TLS mode (implicit/starttls): ').to_lower()
+	ca_bundle := os.input('PEM CA bundle path: ')
 	println('Login')
 	username := os.input('Username: ')
 	password := os.input('Password: ')
@@ -18,19 +21,22 @@ fn main() {
 	to := os.input('To: ')
 	subject := os.input('Subject: ')
 	body := os.input('Body: ')
-	client_cfg := smtp.Client{
-		server: mailserver
-		from: from
-		port: mailport
+	client_cfg := smtp.Config{
+		server:   mailserver
+		from:     from
+		port:     mailport
 		username: username
 		password: password
+		ssl:      tls_mode == 'implicit'
+		starttls: tls_mode == 'starttls'
+		verify:   ca_bundle
 	}
 	send_cfg := smtp.Mail{
-		to: to
-		subject: subject
+		to:        to
+		subject:   subject
 		body_type: .html
-		body: body
+		body:      body
 	}
-	mut client := smtp.new_client(client_cfg) or { panic('Error configuring smtp') }
-	client.send(send_cfg) or { panic('Error resolving email address') }
+	mut client := smtp.new_client(client_cfg) or { panic('Error with configuring smtp: ${err}') }
+	client.send(send_cfg) or { panic('Error resolving email address: ${err}') }
 }

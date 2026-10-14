@@ -1,0 +1,6 @@
+fn main() {
+	i := 1
+	p := &i
+	q := p
+	assert p == q
+}

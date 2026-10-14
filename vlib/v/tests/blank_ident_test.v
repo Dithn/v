@@ -114,11 +114,9 @@ fn test_nested_for_in_array_both() {
 	}
 }
 
-const (
-	m = {
-		'key': 'value'
-	}
-)
+const m = {
+	'key': 'value'
+}
 
 fn test_for_in_map_key() {
 	for _, v in m {
@@ -320,4 +318,11 @@ fn test_blank_multi_return() {
 	assert b == '3'
 	assert d == '3'
 	assert g == '3'
+}
+
+fn test_blank_in_for_c_init_stmt() {
+	a := []int{len: 2}
+	for _ := a[1]; a[1] != 0; {
+	}
+	assert true
 }

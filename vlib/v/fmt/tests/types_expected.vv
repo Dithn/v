@@ -2,8 +2,28 @@
 type FooBar = Bar | Foo
 pub type PublicBar = Bar | Foo | FooBar
 
-type Uint = byte | u16 | u32 | u64 // This should stay on the same line
+type Uint = u16 | u32 | u64 | u8 // This should stay on the same line
 type Float = f32 | f64
+
+// Callback represents all the possible callbacks
+pub type Callback = ConnectedCallback // connected callback
+	| LoggedOnCallback // logged on callback
+	| DisconnectedCallback // disconnected callback
+	| LoggedOffCallback // logged off callback
+
+type SumResp = string
+	| int
+	// | f64
+	| map[string]int
+	| map[string]bool
+
+struct ConnectedCallback {}
+
+struct DisconnectedCallback {}
+
+struct LoggedOnCallback {}
+
+struct LoggedOffCallback {}
 
 // Alias type
 type MyInt = int

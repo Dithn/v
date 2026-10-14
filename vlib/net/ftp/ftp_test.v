@@ -1,50 +1,60 @@
 import net.ftp
 
-fn test_ftp_cleint() {
+fn check_for_network(tname string) ? {
+	_ = tname
 	$if !network ? {
-		return
+		eprintln('> skipping ${tname:-20}, since `-d network` is not passed')
+		return none
 	}
-	// NB: this function makes network calls to external servers,
-	// that is why it is not a very good idea to run it in CI.
-	// If you want to run it manually, use:
-	// `v -d network vlib/net/ftp/ftp_test.v`
-	ftp_client_test_inside() or { panic(err) }
 }
 
-fn ftp_client_test_inside() ? {
+fn run_ftp_client_test(server string) ! {
 	mut zftp := ftp.new()
-	// eprintln(zftp)
-	defer {
-		zftp.close() or { panic(err) }
-	}
-	connect_result := zftp.connect('ftp.redhat.com') ?
+	defer { zftp.close() or {} }
+	connect_result := zftp.connect(server)!
 	assert connect_result
-	login_result := zftp.login('ftp', 'ftp') ?
+	println('> connected to ${server}')
+	login_result := zftp.login('ftp', 'ftp')!
 	assert login_result
-	pwd := zftp.pwd() ?
+	pwd := zftp.pwd()!
 	assert pwd.len > 0
-	zftp.cd('/') or {
-		assert false
-		return
-	}
-	dir_list1 := zftp.dir() or {
-		assert false
-		return
-	}
+	zftp.cd('/')!
+	dir_list1 := zftp.dir()!
 	assert dir_list1.len > 0
-	zftp.cd('/suse/linux/enterprise/11Server/en/SAT-TOOLS/SRPMS/') or {
-		assert false
-		return
+}
+
+fn test_ftp_client() {
+	check_for_network(@FN) or { return }
+	// This test uses a third-party FTP server. Protocol and response assertions
+	// still fail, while transport outages should not make CI fail.
+	server := 'ftp.sunet.se:21'
+	run_ftp_client_test(server) or {
+		eprintln('> skipping test_ftp_client: external FTP request to ${server} failed: ${err}')
 	}
-	dir_list2 := zftp.dir() or {
-		assert false
-		return
+}
+
+fn run_ftp_get_test(server string) ! {
+	mut zftp := ftp.new()
+	defer { zftp.close() or {} }
+	connect_result := zftp.connect(server)!
+	assert connect_result
+	println('> connected to ${server}')
+	login_result := zftp.login('ftp', 'ftp')!
+	assert login_result
+	pwd := zftp.pwd()!
+	assert pwd.len > 0
+	mut txt := zftp.get('robots.txt')!
+	assert txt[0] == 35 // first byte is # char
+	zftp.pwd()!
+	zftp.cd('pub')!
+	zftp.cd('..')!
+	zftp.get('robots.txt')!
+}
+
+fn test_ftp_get() {
+	check_for_network(@FN) or { return }
+	server := 'ftp.sunet.se:21'
+	run_ftp_get_test(server) or {
+		eprintln('> skipping test_ftp_get: external FTP request to ${server} failed: ${err}')
 	}
-	assert dir_list2.len > 0
-	assert dir_list2.contains('katello-host-tools-3.3.5-8.sles11_4sat.src.rpm')
-	blob := zftp.get('katello-host-tools-3.3.5-8.sles11_4sat.src.rpm') or {
-		assert false
-		return
-	}
-	assert blob.len > 0
 }

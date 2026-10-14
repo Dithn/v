@@ -1,32 +1,89 @@
-## [Version 0.3](https://github.com/vlang/v/projects/5)
-- [ ] [make `-autofree` the default](https://github.com/vlang/v/issues/6989)
-- [x] [gc option]
-- [ ] [coroutines](https://github.com/vlang/v/issues/561)
+Roadmap with big features.
+For a list of all features and fixes, check out the changelog.
+
+## [Version 0.3]
+
+- [x] gc option
 - [x] channels
 - [x] lock{}
 - [x] thread safe arrays
-- [ ] [thread safe maps](https://github.com/vlang/v/issues/6992)
-- [ ] [C2V translator](https://github.com/vlang/v/issues/6985)
-- [ ] doom.v
 - [x] rune type
 - [x] replace `ustring` with `[]rune`
 - [x] fix `byte.str()`
 - [x] maps with non-string keys
 - [x] iOS/Android support
-- [ ] parallel parser
-- [ ] parallel checker
-- [ ] parallel cgen
-- [ ] `recover()` from panics
+- [x] parallel cgen
 - [x] IO streams
 - [x] struct embedding
-- [ ] interface embedding
+- [x] interface embedding
 - [x] interfaces: allow struct fields (not just methods)
-- [ ] vfmt: fix common errors automatically (make vars mutable and vice versa, add missing imports)
-- [ ] method expressions with an explicit receiver as the first argument
 - [x] short generics syntax (`foo(5)` instead of `foo<int>(5)`)
-- [ ] fix all remaining generics issues
-- [ ] merge v.c and v_win.c
 - [x] more advanced errors, not just `error('message')`
-- [ ] VLS for autocomplete, refactoring, go to definition etc
-- [ ] Recursive structs via optionals: `struct Node { next ?Node }`
-- [ ] Remove `foo = 0` for `&Foo`
+
+## [Version 0.4]
+
+- [x] [Coroutines](https://github.com/vlang/v/discussions/11582) (doesn't work on Windows yet)
+- [x] vfmt: add missing imports (like goimports)
+- [x] Recursive structs via options: `struct Node { next ?Node }`
+- [x] First class Option type
+- [x] Optional function struct fields
+- [x] Handle function pointers safely, remove `if function == 0 {`
+- [x] Bundle an SSL library (mbedtls) like GC
+- [x] Anonymous structs
+- [x] Improve veb: allow separation of logic via "controllers", lots of other fixes
+- [x] New VPM site
+
+## [Version 0.5]
+
+- [x] Parallel C compilation via `-parallel-cc`
+- [x] Parallel parser (not integrated yet)
+- [x] Parallel checker (not integrated yet)
+- [x] Improved veb framework. Separation of global and context (request local) fields.
+      Performance and stability. Based on picoev.
+- [x] -skip-unused on by default
+- [x] Lambdas: `a.sort(|a, b| a > b)`
+- [x] Implicit Veb contexts passed to requests
+- [x] Direct C/C++ interop without generating wrappers (via -experimental for now)
+- [x] Allow `$if` everywhere: top level, inside struct definitions, etc
+
+## [Version 0.6]
+
+- [ ] Custom attributes
+- [ ] Contexts that are passed implicitly (e.g. for custom allocation/memory management)
+- [x] 64/32 bit int depending on arch (will remove array.len limitation on 64 bit systems)
+- [x] `copy()` builtin function (e.g. for easier conversion from `[]Foo` to `[4]Foo`)
+- [x] Integrate the new parallel parser/checker/cc
+- [x] Incremental compilation
+- [ ] Runtime race detector
+- [x] [Thread safe maps](https://github.com/vlang/v/discussions/11729)
+- [x] `recover()` from panics
+- [x] -usecache on by default
+- [x] ORM migrations
+- [ ] Make ORM work without installing developer libs (libpq-dev etc)
+- [ ] Hot code reloading by modifying running binary (using the native backends)
+
+## [Version 1.0]
+
+- [ ] Cross compilation of C
+- [ ] Big remaining bugs fixed
+- [ ] More powerful comptime
+- [ ] Constraints for generics
+- [ ] Coroutines on Windows
+- [ ] Autofree memory management option ready for production
+- [ ] C2V supporting entire C99 standard
+- [ ] [Shared compiled libs](https://github.com/vlang/rfcs/issues/27)
+
+### Tooling
+
+- [x] More stable VLS
+- [ ] Profiler improvements
+  - [ ] Basic interactive shell with search, sort, filter, etc.
+- [ ] VPM
+  - [x] New VPM site
+  - [ ] Package versioning
+- [x] A better documentation platform
+
+### Web
+
+- [x] Site that brings everything together in a single style
+- [ ] Interactive educational platform (learning to program for beginners)

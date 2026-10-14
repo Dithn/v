@@ -1,0 +1,2 @@
+<div title="ignored by include parser">@include "a.txt"</div>
+@include 'b.txt'

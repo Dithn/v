@@ -2,31 +2,34 @@ module net
 
 const max_unix_path = 104
 
-struct C.addrinfo {
+pub struct C.addrinfo {
 mut:
-	ai_family    int
-	ai_socktype  int
-	ai_flags     int
-	ai_protocol  int
-	ai_addrlen   int
+	ai_family    i32
+	ai_socktype  i32
+	ai_flags     i32
+	ai_protocol  i32
+	ai_addrlen   i32
 	ai_addr      voidptr
 	ai_canonname voidptr
 	ai_next      voidptr
 }
 
-struct C.sockaddr_in {
-	sin_family byte
+pub struct C.sockaddr_in {
+mut:
+	sin_family u8
 	sin_port   u16
 	sin_addr   u32
 }
 
-struct C.sockaddr_in6 {
-	sin6_family byte
+pub struct C.sockaddr_in6 {
+mut:
+	sin6_family u8
 	sin6_port   u16
 	sin6_addr   [4]u32
 }
 
-struct C.sockaddr_un {
-	sun_family byte
+pub struct C.sockaddr_un {
+mut:
+	sun_family u8
 	sun_path   [max_unix_path]char
 }

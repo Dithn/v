@@ -1,0 +1,65 @@
+# V3 source formatter
+
+The V3 formatter formats source syntax without type checking.
+
+## Anonymous aggregate indentation
+
+Multiline anonymous `struct` and `union` bodies follow the surrounding field's
+indentation. Nested aggregate bodies add a level, and access sections align with
+their opening aggregate. Continuation text inside multiline literals and block
+comments keeps its original whitespace. Blank lines remain empty.
+
+## Formatting in-memory source
+
+Use `format_text` to format a string without staging the input in a file or
+launching the formatter executable. It returns the formatted text, or a parser
+error with a `main.v:line:column` location. Comments and compile-time branches are
+preserved just as they are when formatting a file.
+
+```v
+import v.gen.v as vgen
+
+fn main() {
+	formatted := vgen.format_text('fn main(){println(1)}') or { panic(err) }
+	println(formatted)
+}
+```
+
+`format_text_with_options(src, options)` accepts the same `FormatOptions` as
+`format_with_options`, including `backend` and `is_new_int`.
+
+For callers that need the AST, `parser.Parser.parse_text(name, src)` parses an
+in-memory source and owns a copy of its bytes. Use a `.v` name, or `.vsh` for
+script mode. Inspect `Parser.diagnostics` for errors. Reusing the parser appends
+each file to the same AST and retains the diagnostics from earlier files, as
+`parse_file` does.
+
+## String literal spelling
+
+Non-interpolated string literals retain their original source spelling for
+everything except the quote delimiter: escape sequences and the `r`, `c`, or `js`
+prefix are copied byte for byte. For example, `'x=\0'` stays `'x=\0'` and
+`'x=\x00'` stays `'x=\x00'`. Surrounding code is still formatted normally.
+
+The formatter uses the original literal's source span rather than decoding and
+re-encoding it. This avoids collapsing hex or Unicode escapes into characters and
+keeps a NUL followed by digits distinct from an octal escape.
+
+The delimiter is normalized: single quotes are preferred, unless the literal
+contains a `'` but no `"`. So `"text"` becomes `'text'`, while `"it's"` keeps its
+double quotes. Only the quote escaping is rewritten along with the delimiter, so
+`"say \"hi\""` becomes `'say "hi"'` and `'it\'s'` becomes `"it's"`. This is the
+rule that interpolated literals and the legacy formatter already follow, so plain
+and interpolated literals are spelled the same way. A raw literal cannot escape a
+quote, so its delimiter decides what it can hold and is kept as written.
+
+Literals without a usable source spelling, such as synthesized AST nodes, still
+use the existing escaping fallback. That fallback emits NUL as `\x00` so that
+following octal digits cannot change the value.
+
+The C-backend rewrite from a string literal's `.str` selector to a `c` literal
+retains the literal spelling and is stable on subsequent formatting passes.
+
+This policy does not change attribute formatting or compiler/scanner escape
+semantics. Interpolated strings continue to use their existing formatting path so
+embedded expressions can be formatted.

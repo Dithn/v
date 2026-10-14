@@ -1,124 +1,140 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module time
 
-// unix returns a time struct from Unix time.
-pub fn unix(abs int) Time {
+// unix returns a Time calculated from the given Unix timestamp in seconds since 1970-01-01 .
+pub fn unix(epoch i64) Time {
+	return unix_nanosecond(epoch, 0)
+}
+
+// unix_milli returns a Time calculated from the given Unix timestamp in milliseconds since 1970-01-01 .
+pub fn unix_milli(ms i64) Time {
+	return ts_to_time_impl(ms, 1_000, 1_000_000)
+}
+
+// unix_micro returns a Time calculated from the given Unix timestamp in microseconds since 1970-01-01 .
+pub fn unix_micro(us i64) Time {
+	return ts_to_time_impl(us, 1_000_000, 1_000)
+}
+
+// unix_nano returns a Time calculated from the given Unix timestamp in nanoseconds since 1970-01-01 .
+pub fn unix_nano(ns i64) Time {
+	return ts_to_time_impl(ns, 1_000_000_000, 1)
+}
+
+fn ts_to_time_impl(value i64, down i64, up i64) Time {
+	epoch, remainder := floor_div_mod(value, down)
+	return unix_nanosecond(epoch, int(remainder * up))
+}
+
+// floor_div_mod returns the quotient of `value / divisor` rounded down, and the remainder,
+// which is in `0 .. divisor - 1` for a positive `divisor`. The `/` and `%` operators round
+// towards zero instead, so they give a negative remainder for a negative `value`.
+fn floor_div_mod(value i64, divisor i64) (i64, i64) {
+	mut quotient := value / divisor
+	mut remainder := value % divisor
+	if remainder < 0 {
+		remainder += divisor
+		quotient--
+	}
+	return quotient, remainder
+}
+
+// unix_microsecond returns a Time struct, given an Unix timestamp in seconds, and a microsecond value.
+// A `microsecond` outside `0 .. 999_999` is carried into the seconds, as in `unix_nanosecond`.
+pub fn unix_microsecond(epoch i64, microsecond int) Time {
+	seconds, remainder := floor_div_mod(i64(microsecond), 1_000_000)
+	return unix_nanosecond(epoch + seconds, int(remainder * 1000))
+}
+
+// unix_nanosecond returns a Time struct given a Unix timestamp in seconds and a nanosecond value.
+// A `nanosecond` outside `0 .. 999_999_999` is carried into the seconds, so the result is the
+// same instant with its `nanosecond` field in that range: `unix_nanosecond(0, -1)` is
+// 1969-12-31 23:59:59.999999999 .
+pub fn unix_nanosecond(abs_unix_timestamp i64, nanosecond int) Time {
+	if nanosecond < 0 || nanosecond >= 1_000_000_000 {
+		seconds, remainder := floor_div_mod(i64(nanosecond), 1_000_000_000)
+		return unix_nanosecond(abs_unix_timestamp + seconds, int(remainder))
+	}
 	// Split into day and time
-	mut day_offset := abs / seconds_per_day
-	if abs % seconds_per_day < 0 {
-		// Compensate for round towards zero on integers as we want floored instead
+	mut day_offset := abs_unix_timestamp / seconds_per_day
+	if abs_unix_timestamp % seconds_per_day < 0 {
+		// Compensate for rounding towards zero on integers as we want floored instead
 		day_offset--
 	}
-	year, month, day := calculate_date_from_offset(day_offset)
-	hr, min, sec := calculate_time_from_offset(abs % seconds_per_day)
+	year, month, day := calculate_date_from_day_offset(day_offset)
+	hour_, minute_, second_ :=
+		calculate_time_from_second_offset(abs_unix_timestamp % seconds_per_day)
 	return Time{
-		year: year
-		month: month
-		day: day
-		hour: hr
-		minute: min
-		second: sec
-		unix: abs
+		year:       year
+		month:      month
+		day:        day
+		hour:       hour_
+		minute:     minute_
+		second:     second_
+		nanosecond: nanosecond
+		unix:       abs_unix_timestamp
 	}
 }
 
-// unix2 returns a time struct from Unix time and microsecond value
-pub fn unix2(abs i64, microsecond int) Time {
-	// Split into day and time
-	mut day_offset := abs / seconds_per_day
-	if abs % seconds_per_day < 0 {
-		// Compensate for round towards zero on integers as we want floored instead
-		day_offset--
-	}
-	year, month, day := calculate_date_from_offset(day_offset)
-	hr, min, sec := calculate_time_from_offset(abs % seconds_per_day)
-	return Time{
-		year: year
-		month: month
-		day: day
-		hour: hr
-		minute: min
-		second: sec
-		microsecond: microsecond
-		unix: abs
-	}
-}
-
-fn calculate_date_from_offset(day_offset_ i64) (int, int, int) {
+// calculate_date_from_day_offset returns the year, month, and day based on the given day offset.
+fn calculate_date_from_day_offset(day_offset_ i64) (int, int, int) {
 	mut day_offset := day_offset_
-	// Move offset to year 2001 as it's the start of a new 400-year cycle
-	// Code below this rely on the fact that the day_offset is lined up with the 400-year cycle
-	// 1970-2000 (inclusive) has 31 years (8 of which are leap years)
-	mut year := 2001
-	day_offset -= 31 * 365 + 8
-	// Account for 400 year cycle
-	year += int(day_offset / days_per_400_years) * 400
-	day_offset %= days_per_400_years
-	// Account for 100 year cycle
-	if day_offset == days_per_100_years * 4 {
-		year += 300
-		day_offset -= days_per_100_years * 3
+
+	// source: http://howardhinnant.github.io/date_algorithms.html#civil_from_days
+
+	// shift from 1970-01-01 to 0000-03-01
+	day_offset += 719468 // int(days_per_400_years * 1970 / 400 - (28+31))
+
+	// era => floor(day_offset / days_per_400_years), while `/` truncates toward zero.
+	// It is an i64, so that `era * days_per_400_years` below does not overflow a 32-bit int.
+	mut era := i64(0)
+	if day_offset >= 0 {
+		era = day_offset / days_per_400_years
 	} else {
-		year += int(day_offset / days_per_100_years) * 100
-		day_offset %= days_per_100_years
+		era = (day_offset - (days_per_400_years - 1)) / days_per_400_years
 	}
-	// Account for 4 year cycle
-	if day_offset == days_per_4_years * 25 {
-		year += 96
-		day_offset -= days_per_4_years * 24
+
+	// day_of_era => [0..146096]
+	day_of_era := day_offset - era * days_per_400_years
+
+	// year_of_era => [0..399]
+	year_of_era := (day_of_era - day_of_era / (days_per_4_years - 1) +
+		day_of_era / days_per_100_years - day_of_era / (days_per_400_years - 1)) / days_in_year
+
+	mut year := int(year_of_era + era * 400)
+
+	// day_of_year => with year beginning Mar 1 [0..365]
+	day_of_year := day_of_era - (days_in_year * year_of_era + year_of_era / 4 - year_of_era / 100)
+
+	month_position := (5 * day_of_year + 2) / 153
+	day := int(day_of_year - (153 * month_position + 2) / 5 + 1)
+	mut month := int(month_position)
+
+	if month_position < 10 {
+		month += 3
 	} else {
-		year += int(day_offset / days_per_4_years) * 4
-		day_offset %= days_per_4_years
+		month -= 9
 	}
-	// Account for every year
-	if day_offset == 365 * 4 {
-		year += 3
-		day_offset -= 365 * 3
-	} else {
-		year += int(day_offset / 365)
-		day_offset %= 365
+
+	if month <= 2 {
+		year += 1
 	}
-	if day_offset < 0 {
-		year--
-		if is_leap_year(year) {
-			day_offset += 366
-		} else {
-			day_offset += 365
-		}
-	}
-	if is_leap_year(year) {
-		if day_offset > 31 + 29 - 1 {
-			// After leap day; pretend it wasn't there.
-			day_offset--
-		} else if day_offset == 31 + 29 - 1 {
-			// Leap day.
-			return year, 2, 29
-		}
-	}
-	mut estimated_month := day_offset / 31
-	for day_offset >= days_before[estimated_month + 1] {
-		estimated_month++
-	}
-	for day_offset < days_before[estimated_month] {
-		if estimated_month == 0 {
-			break
-		}
-		estimated_month--
-	}
-	day_offset -= days_before[estimated_month]
-	return year, int(estimated_month + 1), int(day_offset + 1)
+
+	return year, month, day
 }
 
-fn calculate_time_from_offset(second_offset_ i64) (int, int, int) {
+// calculate_time_from_second_offset returns the hour, minute, and second
+// based on the given second offset.
+fn calculate_time_from_second_offset(second_offset_ i64) (int, int, int) {
 	mut second_offset := second_offset_
 	if second_offset < 0 {
 		second_offset += seconds_per_day
 	}
 	hour_ := second_offset / seconds_per_hour
 	second_offset %= seconds_per_hour
-	min := second_offset / seconds_per_minute
+	minute_ := second_offset / seconds_per_minute
 	second_offset %= seconds_per_minute
-	return int(hour_), int(min), int(second_offset)
+	return int(hour_), int(minute_), int(second_offset)
 }

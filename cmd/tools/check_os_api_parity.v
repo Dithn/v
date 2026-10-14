@@ -1,72 +1,70 @@
 module main
 
 import os
+import json2
 import v.util
 import v.util.diff
 import v.pref
-import v.builder
-import v.ast
-import rand
 import term
 
-const (
-	base_os      = 'linux'
-	os_names     = ['linux', 'macos', 'windows']
-	skip_modules = [
-		'builtin.bare',
-		'builtin.linux_bare.old',
-		'builtin.js',
-		'strconv',
-		'strconv.ftoa',
-		'hash',
-		'strings',
-		'crypto.rand',
-		'os.bare',
-		'os2',
-		'picohttpparser',
-		'picoev',
-		'szip',
-		'v.eval',
-	]
-)
-
-struct App {
-	diff_cmd   string
-	is_verbose bool
-	modules    []string
-mut:
-	api_differences map[string]int
+struct VDocModule {
+	contents []VDocNode
 }
 
+struct VDocNode {
+	content string
+	kind    string
+	is_pub  bool @[json: public]
+}
+
+const os_list = ['linux', 'macos', 'windows', 'freebsd', 'openbsd', 'solaris', 'termux']
+const skip_modules = [
+	'builtin.bare',
+	'builtin.linux_bare.old',
+	'builtin.js',
+	'builtin.wasm',
+	'strconv',
+	'strconv.ftoa',
+	'hash',
+	'strings',
+	'crypto.rand',
+	'os.bare',
+	'os2',
+	'szip',
+]
+const is_verbose = os.getenv('VERBOSE') != ''
+
 fn main() {
-	vexe := pref.vexe_path()
+	vexe := os.real_path(os.getenv_opt('VEXE') or { @VEXE })
 	vroot := os.dir(vexe)
+	base_os := pref.host_os_name()
 	util.set_vroot_folder(vroot)
-	os.chdir(vroot)
-	cmd := diff.find_working_diff_command() or { '' }
-	mut app := App{
-		diff_cmd: cmd
-		is_verbose: os.getenv('VERBOSE').len > 0
-		modules: if os.args.len > 1 { os.args[1..] } else { all_vlib_modules() }
-	}
-	for mname in app.modules {
-		if !app.is_verbose {
-			eprintln('Checking module: $mname ...')
+	os.chdir(vroot)!
+	modules := if os.args.len > 1 { os.args[1..] } else { all_vlib_modules() }
+	mut diff_modules := map[string]bool{}
+	other_os_list := os_list.filter(it != base_os)
+	for m in modules {
+		if !is_verbose {
+			eprintln('Checking module: ${m} ...')
 		}
-		api_base := app.gen_api_for_module_in_os(mname, base_os)
-		for oname in os_names {
-			if oname == base_os {
+		api_base := gen_api_for_module_in_os(m, base_os)
+		for other_os in other_os_list {
+			api_os := gen_api_for_module_in_os(m, other_os)
+			if api_base == api_os {
 				continue
 			}
-			api_os := app.gen_api_for_module_in_os(mname, oname)
-			app.compare_api(api_base, api_os, mname, base_os, oname)
+			diff_modules[m] = true
+			summary := 'Different APIs found for module: `${m}`, between OS base: `${base_os}` and OS: `${other_os}`'
+			eprintln(term.header(summary, '-'))
+			diff_ := diff.compare_text(api_base, api_os) or { continue }
+			println(diff_)
+			eprintln(term.h_divider('-'))
 		}
 	}
-	howmany := app.api_differences.len
-	if howmany > 0 {
-		eprintln(term.header('Found $howmany modules with different APIs', '='))
-		for m in app.api_differences.keys() {
-			eprintln('Module: $m')
+	if diff_modules.len > 0 {
+		eprintln(term.header('Found ${diff_modules.len} modules with different APIs', '='))
+		for m in diff_modules.keys() {
+			eprintln('Module: ${m}')
 		}
 		exit(1)
 	}
@@ -90,41 +88,24 @@ fn all_vlib_modules() []string {
 	return modules
 }
 
-fn (app App) gen_api_for_module_in_os(mod_name string, os_name string) string {
-	if app.is_verbose {
+fn gen_api_for_module_in_os(mod_name string, os_name string) string {
+	if is_verbose {
 		eprintln('Checking module: ${mod_name:-30} for OS: ${os_name:-10} ...')
 	}
-	mpath := os.join_path('vlib', mod_name.replace('.', '/'))
-	tmpname := '/tmp/${mod_name}_${os_name}.c'
-	prefs, _ := pref.parse_args([], ['-os', os_name, '-o', tmpname, '-shared', mpath])
-	mut b := builder.new_builder(prefs)
-	b.compile_c()
+	vexe := os.real_path(os.getenv_opt('VEXE') or { @VEXE })
+	result := os.exec([vexe, 'doc', '-f', 'json', '-o', '-', '-os', '${os_name}', '${mod_name}'])
+	if result.exit_code != 0 {
+		panic('failed to document `${mod_name}` for `${os_name}`:\n${result.output}')
+	}
+	doc := json2.decode[VDocModule](result.output) or {
+		panic('failed to decode documentation for `${mod_name}` on `${os_name}`: ${err}')
+	}
 	mut res := []string{}
-	for f in b.parsed_files {
-		for s in f.stmts {
-			if s is ast.FnDecl {
-				if s.is_pub {
-					fn_signature := s.stringify(b.table, mod_name, map[string]string{})
-					fn_mod := s.modname()
-					if fn_mod == mod_name {
-						fline := '$fn_mod: $fn_signature'
-						res << fline
-					}
-				}
-			}
+	for node in doc.contents {
+		if node.is_pub && node.kind in ['function', 'method'] {
+			res << '${mod_name}: ${node.content}'
 		}
 	}
 	res.sort()
 	return res.join('\n')
-}
-
-fn (mut app App) compare_api(api_base string, api_os string, mod_name string, os_base string, os_target string) {
-	res := diff.color_compare_strings(app.diff_cmd, rand.ulid(), api_base, api_os)
-	if res.len > 0 {
-		summary := 'Different APIs found for module: `$mod_name`, between OS base: `$os_base` and OS: `$os_target`'
-		eprintln(term.header(summary, '-'))
-		eprintln(res)
-		eprintln(term.h_divider('-'))
-		app.api_differences[mod_name] = 1
-	}
 }

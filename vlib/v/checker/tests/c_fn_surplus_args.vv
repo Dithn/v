@@ -1,6 +1,6 @@
 fn C.no() // untyped
 fn C.y1(int)
-fn C.ret()byte
+fn C.ret() u8
 
 fn main() {
 	C.no(1) // allowed
@@ -15,5 +15,5 @@ fn main() {
 	C.af(3)
 }
 
-[trusted]
-fn C.af()int
+@[trusted]
+fn C.af() int

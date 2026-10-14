@@ -1,144 +1,51 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 module builtin
 
-// pub fn vsyscall(id int
-//
-
-/*
-pub const (
-	sys_write = 1
-	sys_mkdir = 83
-)
-const (
-	stdin_value = 0
-	stdout_value = 1
-	stderr_value  = 2
-)
-*/
-
+@[markused]
 fn builtin_init() {
-	// Do nothing
-}
-
-fn print_backtrace_skipping_top_frames(xskipframes int) bool {
-	$if no_backtrace ? {
-		return false
-	} $else {
-		skipframes := xskipframes + 2
-		$if macos || freebsd || openbsd || netbsd {
-			return print_backtrace_skipping_top_frames_bsd(skipframes)
-		} $else $if linux {
-			return print_backtrace_skipping_top_frames_linux(skipframes)
-		} $else {
-			println('print_backtrace_skipping_top_frames is not implemented. skipframes: $skipframes')
+	$if prealloc && v3_backend ? {
+		unsafe { prealloc_vinit() }
+	}
+	$if gcboehm ? {
+		$if !gc_warn_on_stderr ? {
+			gc_set_warn_proc(internal_gc_warn_proc_none)
 		}
 	}
-	return false
-}
-
-// the functions below are not called outside this file,
-// so there is no need to have their twins in builtin_windows.v
-fn print_backtrace_skipping_top_frames_bsd(skipframes int) bool {
-	$if no_backtrace ? {
-		return false
-	} $else {
-		$if macos || freebsd || openbsd || netbsd {
-			buffer := [100]voidptr{}
-			nr_ptrs := C.backtrace(&buffer[0], 100)
-			if nr_ptrs < 2 {
-				eprintln('C.backtrace returned less than 2 frames')
-				return false
-			}
-			C.backtrace_symbols_fd(&buffer[skipframes], nr_ptrs - skipframes, 2)
-		}
-		return true
+	$if !vinix {
+		unbuffer_stdout()
 	}
-}
-
-fn C.tcc_backtrace(fmt &char) int
-fn print_backtrace_skipping_top_frames_linux(skipframes int) bool {
-	$if android {
-		eprintln('On Android no backtrace is available.')
-		return false
-	}
-	$if !glibc {
-		eprintln('backtrace_symbols is missing => printing backtraces is not available.')
-		eprintln('Some libc implementations like musl simply do not provide it.')
-		return false
-	}
-	$if no_backtrace ? {
-		return false
-	} $else {
-		$if linux && !freestanding {
-			$if tinyc {
-				C.tcc_backtrace(c'Backtrace')
-				return false
-			}
-			buffer := [100]voidptr{}
-			nr_ptrs := C.backtrace(&buffer[0], 100)
-			if nr_ptrs < 2 {
-				eprintln('C.backtrace returned less than 2 frames')
-				return false
-			}
-			nr_actual_frames := nr_ptrs - skipframes
-			mut sframes := []string{}
-			//////csymbols := backtrace_symbols(*voidptr(&buffer[skipframes]), nr_actual_frames)
-			csymbols := C.backtrace_symbols(voidptr(&buffer[skipframes]), nr_actual_frames)
-			for i in 0 .. nr_actual_frames {
-				sframes << unsafe { tos2(&byte(csymbols[i])) }
-			}
-			for sframe in sframes {
-				executable := sframe.all_before('(')
-				addr := sframe.all_after('[').all_before(']')
-				beforeaddr := sframe.all_before('[')
-				cmd := 'addr2line -e $executable $addr'
-				// taken from os, to avoid depending on the os module inside builtin.v
-				f := C.popen(&char(cmd.str), c'r')
-				if isnil(f) {
-					eprintln(sframe)
-					continue
-				}
-				buf := [1000]byte{}
-				mut output := ''
-				unsafe {
-					bp := &buf[0]
-					for C.fgets(&char(bp), 1000, f) != 0 {
-						output += tos(bp, vstrlen(bp))
-					}
-				}
-				output = output.trim_space() + ':'
-				if C.pclose(f) != 0 {
-					eprintln(sframe)
-					continue
-				}
-				if output in ['??:0:', '??:?:'] {
-					output = ''
-				}
-				// See http://wiki.dwarfstd.org/index.php?title=Path_Discriminators
-				// NB: it is shortened here to just d. , just so that it fits, and so
-				// that the common error file:lineno: line format is enforced.
-				output = output.replace(' (discriminator', ': (d.')
-				eprintln('${output:-55s} | ${addr:14s} | $beforeaddr')
-			}
-		}
-	}
-	return true
+	install_segfault_handler()
 }
 
 fn break_if_debugger_attached() {
 	unsafe {
 		mut ptr := &voidptr(0)
-		*ptr = voidptr(0)
-		_ = ptr
+		*ptr = nil
 	}
 }
 
-// These functions are Windows specific - provide dummys for *nix
-pub fn winapi_lasterr_str() string {
-	return ''
+@[noreturn]
+pub fn panic_lasterr(base string) {
+	// TODO: use strerror_r and errno
+	panic(base + ' unknown')
 }
 
-[noreturn]
-pub fn panic_lasterr() {}
+// write_buf_to_console is a Windows-only helper; on non-Windows platforms
+// it is a no-op stub so that callers guarded by `$if windows { ... }` still
+// type-check on other targets.
+fn write_buf_to_console(fd int, buf &u8, buf_len int) bool {
+	return false
+}
+
+// write_buf_to_fd_kernel32 is a Windows-only helper for the minimal V2 PE path.
+// Keep a non-Windows stub so optional compile-time branches type-check while
+// bootstrapping V on other hosts.
+fn write_buf_to_fd_kernel32(fd int, buf &u8, buf_len int) bool {
+	return false
+}
+
+fn write_buf_to_fd_kernel32_or_exit(fd int, buf &u8, buf_len int) {}
+
+fn write_buf_to_fd_windows_non_minimal(fd int, buf &u8, buf_len int) {}

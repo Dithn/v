@@ -1,0 +1,17 @@
+module main
+
+import json2
+
+struct Message {
+	content string
+}
+
+struct LinksData {
+	total_results u32
+	messages      [][]Message
+}
+
+fn main() {
+	links_data := json2.decode[LinksData]('{}')!
+	println(links_data.messages)
+}

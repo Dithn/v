@@ -1,17 +1,14 @@
-fn max<T>(a ...T) T {
-	mut max := a[0]
+fn max[T](a ...T) T {
+	mut result := a[0]
 	for item in a[1..] {
-		if max < item {
-			max = item
+		if result < item {
+			result = item
 		}
 	}
-	return max
+	return result
 }
 
 fn main() {
-	a := max([1, 2, 3, 4])
-	println(a)
-
-	b := max<int>([1, 2, 3, 4])
+	b := max[int]([1, 2, 3, 4])
 	println(b)
 }

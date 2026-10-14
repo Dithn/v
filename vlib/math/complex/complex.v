@@ -1,4 +1,4 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
 
@@ -7,13 +7,14 @@ module complex
 import math
 
 pub struct Complex {
-pub:
+pub mut:
 	re f64
 	im f64
 }
 
-pub fn complex(re f64, im f64) Complex {
-	return Complex{re, im}
+// complex returns a complex struct with the given `real` and `imaginary` values
+pub fn complex(real f64, imaginary f64) Complex {
+	return Complex{real, imaginary}
 }
 
 // To String method
@@ -27,9 +28,10 @@ pub fn (c Complex) str() string {
 // Complex Modulus value
 // mod() and abs() return the same
 pub fn (c Complex) abs() f64 {
-	return C.hypot(c.re, c.im)
+	return math.hypot(c.re, c.im)
 }
 
+// mod returns the modulus value of `c`
 pub fn (c Complex) mod() f64 {
 	return c.abs()
 }
@@ -136,7 +138,7 @@ pub fn (c Complex) ln() Complex {
 // Based on
 // http://www.milefoot.com/math/complex/summaryops.htm
 pub fn (c Complex) log(base Complex) Complex {
-	return base.ln().divide(c.ln())
+	return c.ln().divide(base.ln())
 }
 
 // Complex Argument
@@ -370,5 +372,5 @@ pub fn (c Complex) acsch() Complex {
 
 // Complex Equals
 pub fn (c1 Complex) equals(c2 Complex) bool {
-	return (c1.re == c2.re) && (c1.im == c2.im)
+	return c1.re.eq_epsilon(c2.re) && c1.im.eq_epsilon(c2.im)
 }

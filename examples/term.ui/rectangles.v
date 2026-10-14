@@ -12,7 +12,7 @@ mut:
 
 struct App {
 mut:
-	tui      &tui.Context = 0
+	tui      &tui.Context = unsafe { nil }
 	rects    []Rect
 	cur_rect Rect
 	is_drag  bool
@@ -21,21 +21,20 @@ mut:
 
 fn random_color() tui.Color {
 	return tui.Color{
-		r: byte(rand.intn(256))
-		g: byte(rand.intn(256))
-		b: byte(rand.intn(256))
+		r: rand.u8()
+		g: rand.u8()
+		b: rand.u8()
 	}
 }
 
-fn event(e &tui.Event, x voidptr) {
-	mut app := &App(x)
+fn event(e &tui.Event, mut app App) {
 	match e.typ {
 		.mouse_down {
 			app.is_drag = true
 			app.cur_rect = Rect{
-				c: random_color()
-				x: e.x
-				y: e.y
+				c:  random_color()
+				x:  e.x
+				y:  e.y
 				x2: e.x
 				y2: e.y
 			}
@@ -57,11 +56,11 @@ fn event(e &tui.Event, x voidptr) {
 		}
 		else {}
 	}
+
 	app.redraw = true
 }
 
-fn frame(x voidptr) {
-	mut app := &App(x)
+fn frame(mut app App) {
 	if !app.redraw {
 		return
 	}
@@ -84,14 +83,22 @@ fn frame(x voidptr) {
 	app.redraw = false
 }
 
+type EventFn = fn (&tui.Event, voidptr)
+
+type FrameFn = fn (voidptr)
+
 fn main() {
 	mut app := &App{}
 	app.tui = tui.init(
-		user_data: app
-		event_fn: event
-		frame_fn: frame
+		user_data:   app
+		// The tui callback slots are `voidptr`; `frame`/`event` instead take the typed app
+		// pointer that `user_data` hands back. `&T` and `voidptr` share a representation, so
+		// reinterpreting the fn pointer across that parameter is ABI-safe; the cast only
+		// satisfies the static fn-type check.
+		event_fn:    unsafe { EventFn(event) }
+		frame_fn:    unsafe { FrameFn(frame) }
 		hide_cursor: true
-		frame_rate: 60
+		frame_rate:  60
 	)
-	app.tui.run() ?
+	app.tui.run()!
 }

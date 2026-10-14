@@ -1,16 +1,21 @@
-module main
+module mymodule
 
 import time
 import os
 import v.live
+import math
+
+const some_constant = f64(5.5)
 
 fn append_to_file(fname string, s string) {
 	mut f := os.open_append(fname) or {
-		println('>>>> could not open file $fname for appending, err: $err ')
+		println('>>>> could not open file ${fname} for appending, err: ${err} ')
 		return
 	}
+	f.write_string(time.now().format_rfc3339_micro()) or {}
+	f.write_string(' || ') or {}
 	f.writeln(s) or {
-		println('>>>> could not write to $fname, err: $err ')
+		println('>>>> could not write to ${fname}, err: ${err} ')
 		return
 	}
 	// info := live.info()
@@ -24,31 +29,22 @@ fn myprintln(s string) {
 	os.flush()
 }
 
-[live]
+@[live]
 fn pmessage() string {
+	_ := some_constant * math.sin(2.0 * math.pi * f64(time.ticks() % 6000) / 6000)
 	return 'ORIGINAL'
 }
 
-const (
-	delay = 20
-)
+const delay = 20
 
-fn edefault(name string, default string) string {
-	res := os.getenv(name)
-	if res == '' {
-		return default
-	}
-	return res
-}
-
-fn main() {
+pub fn mymain() {
 	mut info := live.info()
 	info.recheck_period_ms = 5
 	myprintln('START')
 	myprintln('DATE: ' + time.now().str())
 	pmessage()
 	pmessage()
-	max_cycles := edefault('LIVE_CYCLES', '1').int()
+	max_cycles := os.getenv_opt('LIVE_CYCLES') or { '1' }.int()
 	// NB: 1000 * 20 = maximum of ~20s runtime
 	for i := 0; i < max_cycles; i++ {
 		s := pmessage()

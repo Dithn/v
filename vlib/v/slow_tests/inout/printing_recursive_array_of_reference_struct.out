@@ -1,0 +1,8 @@
+&Person{
+    name: 'John'
+    relatives: [&Person{
+        name: 'Jane'
+        relatives: [&<circular>]
+    }]
+}
+Success

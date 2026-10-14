@@ -1,0 +1,71 @@
+## Description
+
+`xml` is a module to parse XML documents into a tree structure. It also supports
+validation of XML documents against a DTD.
+
+Note that this is not a streaming XML parser. It reads the entire document into
+memory and then parses it. This is not a problem for small documents, but it
+might be a problem for extremely large documents (several hundred megabytes or more).
+
+The public function `parse_single_node` can be used to parse a single node from
+an implementation of `io.Reader`, which can help parse large XML documents on an
+element-by-element basis. Sample usage is provided in the `parser_test.v` file.
+
+## Usage
+
+### Parsing XML Files
+
+There are three different ways to parse an XML Document:
+
+1. Pass the entire XML document as a string to `XMLDocument.from_string`.
+2. Specify a file path to `XMLDocument.from_file`.
+3. Use a source that implements `io.Reader` and pass it to `XMLDocument.from_reader`.
+
+```v
+import encoding.xml
+
+//...
+doc := xml.XMLDocument.from_file('test/sample.xml')!
+```
+
+Attribute names must be unique within an element. Repeated attribute names produce a parse error.
+
+### External DOCTYPE Identifiers
+
+`SYSTEM` and `PUBLIC` DOCTYPE identifiers are accepted with or without an XML declaration.
+`DocumentType.external_id` retains the quoted identifier for serialization. An optional internal
+subset is retained in `DocumentType.dtd`. External DTD resources are not loaded or fetched.
+Malformed or unterminated identifiers produce a descriptive parse error.
+
+### Validating XML Documents
+
+Simply call `validate` on the parsed XML document.
+
+### Querying
+
+Check the `get_element...` methods defined on the XMLDocument struct.
+
+### Escaping and Un-escaping XML Entities
+
+Parsing decodes predefined entities, decimal and hexadecimal character references, and
+entities declared in the document's internal DTD in text and attribute values. Unknown entities
+and references to invalid XML characters produce an error. Numeric references to whitespace
+are preserved, including at the edges of text nodes. CDATA is left unchanged.
+Literal formatting whitespace is trimmed at element boundaries. Comments and CDATA split
+text fragments without removing separator whitespace inside the same text run.
+
+`validate` checks the parsed tree without decoding its text again.
+
+When the XML document is serialized (using `str` or `pretty_str`), text and attributes are escaped.
+Significant whitespace at text edges and carriage returns are written as character references
+so parsing the serialized document preserves them. Adjacent text, comments, and CDATA are kept
+together to avoid adding formatting whitespace inside text runs.
+
+The escaping and un-escaping can also be done manually using the `escape_text` and
+`unescape_text` methods.
+
+XML attributes require a name and a quoted value. Missing values, unterminated quotes and
+attributes without a name produce parse errors. Values may contain the other kind of quote.
+Text, comments and CDATA retain their document order and the separator whitespace between
+fragments. Truncated nodes and markup produce errors naming the construct that was left open.
+Processing instructions are reported as unsupported.

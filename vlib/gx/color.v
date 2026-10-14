@@ -1,234 +1,126 @@
+@[deprecated: 'module gx is deprecated, use `import gg` instead']
+@[deprecated_after: '2026-01-24']
 module gx
 
-pub const (
-	blue = Color{
-		r: 0
-		g: 0
-		b: 255
-	}
-	red = Color{
-		r: 255
-		g: 0
-		b: 0
-	}
-	green = Color{
-		r: 0
-		g: 255
-		b: 0
-	}
-	yellow = Color{
-		r: 255
-		g: 255
-		b: 0
-	}
-	orange = Color{
-		r: 255
-		g: 165
-		b: 0
-	}
-	purple = Color{
-		r: 128
-		g: 0
-		b: 128
-	}
-	black = Color{
-		r: 0
-		g: 0
-		b: 0
-	}
-	gray = Color{
-		r: 128
-		g: 128
-		b: 128
-	}
-	indigo = Color{
-		r: 75
-		g: 0
-		b: 130
-	}
-	pink = Color{
-		r: 255
-		g: 192
-		b: 203
-	}
-	violet = Color{
-		r: 238
-		g: 130
-		b: 238
-	}
-	white = Color{
-		r: 255
-		g: 255
-		b: 255
-	}
-	dark_blue = Color{
-		r: 0
-		g: 0
-		b: 139
-	}
-	dark_gray = Color{
-		r: 169
-		g: 169
-		b: 169
-	}
-	dark_green = Color{
-		r: 0
-		g: 100
-		b: 0
-	}
-	dark_red = Color{
-		r: 139
-		g: 0
-		b: 0
-	}
-	light_blue = Color{
-		r: 173
-		g: 216
-		b: 230
-	}
-	light_gray = Color{
-		r: 211
-		g: 211
-		b: 211
-	}
-	light_green = Color{
-		r: 144
-		g: 238
-		b: 144
-	}
-	light_red = Color{
-		r: 255
-		g: 204
-		b: 203
-	}
-)
+import gg
 
 // Color represents a 32 bit color value in sRGB format
-pub struct Color {
-pub mut:
-	r byte
-	g byte
-	b byte
-	a byte = 255
-}
+
+pub type Color = gg.Color
+
+@[deprecated: 'use gg.black instead']
+@[deprecated_after: '2026-01-24']
+pub const black = gg.black
+
+@[deprecated: 'use gg.gray instead']
+@[deprecated_after: '2026-01-24']
+pub const gray = gg.gray
+
+@[deprecated: 'use gg.white instead']
+@[deprecated_after: '2026-01-24']
+pub const white = gg.white
+
+@[deprecated: 'use gg.red instead']
+@[deprecated_after: '2026-01-24']
+pub const red = gg.red
+
+@[deprecated: 'use gg.green instead']
+@[deprecated_after: '2026-01-24']
+pub const green = gg.green
+
+@[deprecated: 'use gg.blue instead']
+@[deprecated_after: '2026-01-24']
+pub const blue = gg.blue
+
+@[deprecated: 'use gg.yellow instead']
+@[deprecated_after: '2026-01-24']
+pub const yellow = gg.yellow
+
+@[deprecated: 'use gg.magenta instead']
+@[deprecated_after: '2026-01-24']
+pub const magenta = gg.magenta
+
+@[deprecated: 'use gg.cyan instead']
+@[deprecated_after: '2026-01-24']
+pub const cyan = gg.cyan
+
+@[deprecated: 'use gg.orange instead']
+@[deprecated_after: '2026-01-24']
+pub const orange = gg.orange
+
+@[deprecated: 'use gg.purple instead']
+@[deprecated_after: '2026-01-24']
+pub const purple = gg.purple
+
+@[deprecated: 'use gg.indigo instead']
+@[deprecated_after: '2026-01-24']
+pub const indigo = gg.indigo
+
+@[deprecated: 'use gg.pink instead']
+@[deprecated_after: '2026-01-24']
+pub const pink = gg.pink
+
+@[deprecated: 'use gg.violet instead']
+@[deprecated_after: '2026-01-24']
+pub const violet = gg.violet
+
+@[deprecated: 'use gg.dark_blue instead']
+@[deprecated_after: '2026-01-24']
+pub const dark_blue = gg.dark_blue
+
+@[deprecated: 'use gg.dark_gray instead']
+@[deprecated_after: '2026-01-24']
+pub const dark_gray = gg.dark_gray
+
+@[deprecated: 'use gg.dark_green instead']
+@[deprecated_after: '2026-01-24']
+pub const dark_green = gg.dark_green
+
+@[deprecated: 'use gg.dark_red instead']
+@[deprecated_after: '2026-01-24']
+pub const dark_red = gg.dark_red
+
+@[deprecated: 'use gg.light_blue instead']
+@[deprecated_after: '2026-01-24']
+pub const light_blue = gg.light_blue
+
+@[deprecated: 'use gg.light_gray instead']
+@[deprecated_after: '2026-01-24']
+pub const light_gray = gg.light_gray
+
+@[deprecated: 'use gg.light_green instead']
+@[deprecated_after: '2026-01-24']
+pub const light_green = gg.light_green
+
+@[deprecated: 'use gg.light_red instead']
+@[deprecated_after: '2026-01-24']
+pub const light_red = gg.light_red
 
 // hex takes in a 32 bit integer and splits it into 4 byte values
-pub fn hex(color int) Color {
-	return Color{
-		r: byte((color >> 24) & 0xFF)
-		g: byte((color >> 16) & 0xFF)
-		b: byte((color >> 8) & 0xFF)
-		a: byte(color & 0xFF)
-	}
+@[deprecated: 'use gg.hex instead']
+@[deprecated_after: '2026-01-24']
+pub fn hex(color i32) Color {
+	return gg.hex(color)
 }
 
-pub fn rgb(r byte, g byte, b byte) Color {
-	return Color{
-		r: r
-		g: g
-		b: b
-	}
+// rgb builds a Color instance from given r, g, b values
+@[deprecated: 'use gg.rgb instead']
+@[deprecated_after: '2026-01-24']
+pub fn rgb(r u8, g u8, b u8) Color {
+	return gg.rgb(r, g, b)
 }
 
-pub fn rgba(r byte, g byte, b byte, a byte) Color {
-	return Color{
-		r: r
-		g: g
-		b: b
-		a: a
-	}
+// rgba builds a Color instance from given r, g, b, a values
+@[deprecated: 'use gg.rgba instead']
+@[deprecated_after: '2026-01-24']
+pub fn rgba(r u8, g u8, b u8, a u8) Color {
+	return gg.rgba(r, g, b, a)
 }
 
-pub fn (c Color) + (c2 Color) Color {
-	return Color{
-		r: c.r + c2.r
-		g: c.g + c2.g
-		b: c.b + c2.b
-		a: c.b + c2.a
-	}
-}
-
-pub fn (c Color) - (c2 Color) Color {
-	return Color{
-		r: c.r - c2.r
-		g: c.g - c2.g
-		b: c.b - c2.b
-		a: c.b - c2.a
-	}
-}
-
-pub fn (c Color) * (c2 Color) Color {
-	return Color{
-		r: c.r * c2.r
-		g: c.g * c2.g
-		b: c.b * c2.b
-		a: c.b * c2.a
-	}
-}
-
-pub fn (c Color) / (c2 Color) Color {
-	return Color{
-		r: c.r / c2.r
-		g: c.g / c2.g
-		b: c.b / c2.b
-		a: c.b / c2.a
-	}
-}
-
-pub fn (c Color) eq(c2 Color) bool {
-	return c.r == c2.r && c.g == c2.g && c.b == c2.b && c.a == c2.a
-}
-
-pub fn (c Color) str() string {
-	return 'Color{$c.r, $c.g, $c.b, $c.a}'
-}
-
-// rgba8 - convert a color value to an int in the RGBA8 order.
-// see https://developer.apple.com/documentation/coreimage/ciformat
-[inline]
-pub fn (c Color) rgba8() int {
-	return (int(c.r) << 24) + (int(c.g) << 16) + (int(c.b) << 8) + int(c.a)
-}
-
-// bgra8 - convert a color value to an int in the BGRA8 order.
-// see https://developer.apple.com/documentation/coreimage/ciformat
-[inline]
-pub fn (c Color) bgra8() int {
-	return (int(c.b) << 24) + (int(c.g) << 16) + (int(c.r) << 8) + int(c.a)
-}
-
-// abgr8 - convert a color value to an int in the ABGR8 order.
-// see https://developer.apple.com/documentation/coreimage/ciformat
-[inline]
-pub fn (c Color) abgr8() int {
-	return (int(c.a) << 24) + (int(c.b) << 16) + (int(c.g) << 8) + int(c.r)
-}
-
-const (
-	string_colors = {
-		'blue':        blue
-		'red':         red
-		'green':       green
-		'yellow':      yellow
-		'orange':      orange
-		'purple':      purple
-		'black':       black
-		'gray':        gray
-		'indigo':      indigo
-		'pink':        pink
-		'violet':      violet
-		'white':       white
-		'dark_blue':   dark_blue
-		'dark_gray':   dark_gray
-		'dark_green':  dark_green
-		'dark_red':    dark_red
-		'light_blue':  light_blue
-		'light_gray':  light_gray
-		'light_green': light_green
-		'light_red':   light_red
-	}
-)
-
+// color_from_string returns a Color, corresponding to the given string
+// or black Color if string is not found in lookup table, or a hex color if starting with #
+@[deprecated: 'use gg.color_from_string instead']
+@[deprecated_after: '2026-01-24']
 pub fn color_from_string(s string) Color {
-	return gx.string_colors[s]
+	return gg.color_from_string(s)
 }

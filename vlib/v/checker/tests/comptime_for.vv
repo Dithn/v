@@ -1,17 +1,23 @@
 fn unknown() {
-	$for m in Huh.methods {}
-	$for f in Huh.fields {}
+	$for m in Huh.methods {
+	}
+	$for f in Huh.fields {
+	}
 	$for f in T.fields {
-		$if f.typ is Huh {}
-		$if f.typ is T {}
+		$if f.typ is Huh {
+		}
+		$if f.typ is T {
+		}
 	}
 	_ = m
 }
 
-fn gf<T>() {
+fn gf[T]() {
 	$for f in T.fields {
-		$if f.typ is T {}
-		$if f.typ is U {}
+		$if f.typ is T {
+		}
+		$if f.typ is U {
+		}
 	}
 	_ = f
 }
@@ -20,4 +26,6 @@ struct S1 {
 	i int
 }
 
-gf<S1>()
+fn main() {
+	gf[S1]()
+}

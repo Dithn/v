@@ -1,27 +1,25 @@
 import os
 import io.util
 
-const (
-	// tfolder will contain all the temporary files/subfolders made by
-	// the different tests. It would be removed in testsuite_end(), so
-	// individual os tests do not need to clean up after themselves.
-	tfolder = os.join_path(os.temp_dir(), 'v', 'tests', 'io_util_test')
-)
+// tfolder will contain all the temporary files/subfolders made by
+// the different tests. It would be removed in testsuite_end(), so
+// individual os tests do not need to clean up after themselves.
+const tfolder = os.join_path(os.vtmp_dir(), 'io_util_tests')
 
 fn testsuite_begin() {
-	eprintln('testsuite_begin, tfolder = $tfolder')
+	eprintln('testsuite_begin, tfolder = ${tfolder}')
 	os.rmdir_all(tfolder) or {}
 	assert !os.is_dir(tfolder)
 	os.mkdir_all(tfolder) or { panic(err) }
-	os.chdir(tfolder)
+	os.chdir(tfolder) or {}
 	assert os.is_dir(tfolder)
 }
 
 fn testsuite_end() {
-	os.chdir(os.wd_at_startup)
+	os.chdir(os.wd_at_startup) or {}
 	os.rmdir_all(tfolder) or {}
 	assert !os.is_dir(tfolder)
-	// eprintln('testsuite_end  , tfolder = $tfolder removed.')
+	// eprintln('testsuite_end  , tfolder = ${tfolder} removed.')
 }
 
 fn test_temp_file() {
@@ -81,11 +79,10 @@ fn test_temp_dir() {
 		return
 	}
 	assert os.is_dir(path)
-	mut writable := os.is_writable_folder(path) or {
+	os.ensure_folder_is_writable(path) or {
 		assert false
 		return
 	}
-	assert writable
 	mut prev_path := path
 	// Test pattern
 	path = util.temp_dir(
@@ -114,11 +111,10 @@ fn test_temp_dir() {
 	}
 	assert path != prev_path
 	assert os.is_dir(path)
-	writable = os.is_writable_folder(path) or {
+	os.ensure_folder_is_writable(path) or {
 		assert false
 		return
 	}
-	assert writable
 	assert path.contains(tfolder)
 	filename = os.file_name(path)
 	for c in filename {

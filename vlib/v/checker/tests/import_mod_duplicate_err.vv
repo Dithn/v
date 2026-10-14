@@ -1,0 +1,7 @@
+module strings
+
+import strings
+
+const used = true
+
+println(strings.used)

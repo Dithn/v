@@ -1,6 +1,6 @@
 import time
 
-// NB: on CI jobs, especially msvc ones, sleep_ms may sleep for much more
+// Note: on CI jobs, especially msvc ones, sleep_ms may sleep for much more
 // time than you have specified. To avoid false positives from CI test
 // failures, some of the asserts will be run only if you pass `-d stopwatch`
 fn test_stopwatch_works_as_intended() {
@@ -8,7 +8,7 @@ fn test_stopwatch_works_as_intended() {
 	// sample code that you want to measure:
 	println('Hello world')
 	time.sleep(1 * time.millisecond)
-	//
+
 	println('Greeting the world took: ${sw.elapsed().nanoseconds()}ns')
 	assert sw.elapsed().nanoseconds() > 0
 }

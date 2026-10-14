@@ -1,3 +1,4 @@
+// vtest build: !docker-ubuntu-musl
 import x.ttf
 import os
 import strings
@@ -151,7 +152,7 @@ ffbf ffff bf00 0000 0000 0000 0000 0000
 0000 0000 0000 0000 0000 0000 0000 0000
 '
 
-fn save_raw_data_as_array(buf_bin []byte, file_name string) {
+fn save_raw_data_as_array(buf_bin []u8, file_name string) {
 	mut buf := strings.new_builder(buf_bin.len * 5)
 	for x in buf_bin {
 		buf.write_string('0x${x:02x},')
@@ -163,14 +164,14 @@ fn test_main() {
 	mut tf := ttf.TTF_File{}
 	$if create_data ? {
 		tf.buf = os.read_bytes(font_path) or { panic(err) }
-		println('TrueTypeFont file [$font_path] len: $tf.buf.len')
+		println('TrueTypeFont file [${font_path}] len: ${tf.buf.len}')
 		save_raw_data_as_array(tf.buf, 'test_ttf_Font_arr.bin')
 	} $else {
 		mut mut_font_bytes := font_bytes
 		tf.buf = unsafe { mut_font_bytes.data().vbytes(font_bytes.len) }
 	}
 	tf.init()
-	// println("Unit per EM: $tf.units_per_em")
+	// println("Unit per EM: ${tf.units_per_em}")
 
 	w := 64
 	h := 32
@@ -179,15 +180,15 @@ fn test_main() {
 
 	font_size := 20
 	device_dpi := 72
-	scale := f32(font_size * device_dpi) / f32(72 * tf.units_per_em)
+	scale := f32(font_size * device_dpi) / f32(72 * int(tf.units_per_em))
 
 	mut bmp := ttf.BitMap{
-		tf: &tf
-		buf: unsafe { malloc(sz) }
+		tf:       &tf
+		buf:      unsafe { malloc(sz) }
 		buf_size: sz
-		scale: scale
-		width: w
-		height: h
+		scale:    scale
+		width:    w
+		height:   h
 	}
 
 	y_base := int((tf.y_max - tf.y_min) * bmp.scale)
@@ -212,23 +213,23 @@ fn test_main() {
 	}
 }
 
-fn get_raw_data(data string) []byte {
-	mut buf := []byte{}
+fn get_raw_data(data string) []u8 {
+	mut buf := []u8{}
 	mut c := 0
-	mut b := 0
+	mut b := u32(0)
 	for ch in data {
 		if ch >= `0` && ch <= `9` {
 			b = b << 4
-			b += int(ch - `0`)
+			b += u32(ch - `0`)
 			c++
 		} else if ch >= `a` && ch <= `f` {
 			b = b << 4
-			b += int(ch - `a` + 10)
+			b += u32(ch - `a` + 10)
 			c++
 		}
 
 		if c == 2 {
-			buf << byte(b)
+			buf << u8(b)
 			b = 0
 			c = 0
 		}

@@ -6,8 +6,8 @@ fn generate_temp_html() string {
 	mut temp_html := strings.new_builder(200)
 	temp_html.write_string('<!doctype html><html><head><title>Giant String</title></head><body>')
 	for counter := 0; counter < 4; counter++ {
-		temp_html.write_string("<div id='name_$counter' ")
-		temp_html.write_string("class='several-$counter'>Look at $counter</div>")
+		temp_html.write_string("<div id='name_${counter}' ")
+		temp_html.write_string("class='several-${counter}'>Look at ${counter}</div>")
 	}
 	temp_html.write_string('</body></html>')
 	return temp_html.str()
@@ -15,24 +15,24 @@ fn generate_temp_html() string {
 
 fn test_search_by_tag_type() {
 	dom := parse(generate_temp_html())
-	assert dom.get_tag('div').len == 4
-	assert dom.get_tag('head').len == 1
-	assert dom.get_tag('body').len == 1
+	assert dom.get_tags(name: 'div').len == 4
+	assert dom.get_tags(name: 'head').len == 1
+	assert dom.get_tags(name: 'body').len == 1
 }
 
 fn test_search_by_attribute_value() {
 	mut dom := parse(generate_temp_html())
 	// println(temp_html)
 	print('Amount ')
-	println(dom.get_tag_by_attribute_value('id', 'name_0'))
-	assert dom.get_tag_by_attribute_value('id', 'name_0').len == 1
+	println(dom.get_tags_by_attribute_value('id', 'name_0'))
+	assert dom.get_tags_by_attribute_value('id', 'name_0').len == 1
 }
 
 fn test_access_parent() {
 	mut dom := parse(generate_temp_html())
-	div_tags := dom.get_tag('div')
+	div_tags := dom.get_tags(name: 'div')
 	parent := div_tags[0].parent
-	assert parent != 0
+	assert unsafe { parent != 0 }
 	for div_tag in div_tags {
 		assert div_tag.parent == parent
 	}
@@ -40,7 +40,7 @@ fn test_access_parent() {
 
 fn test_search_by_attributes() {
 	dom := parse(generate_temp_html())
-	assert dom.get_tag_by_attribute('id').len == 4
+	assert dom.get_tags_by_attribute('id').len == 4
 }
 
 fn test_tags_used() {
@@ -50,7 +50,76 @@ fn test_tags_used() {
 
 fn test_access_tag_fields() {
 	dom := parse(generate_temp_html())
-	id_tags := dom.get_tag_by_attribute('id')
+	id_tags := dom.get_tags_by_attribute('id')
 	assert id_tags[0].name == 'div'
 	assert id_tags[1].attributes['class'] == 'several-1'
+}
+
+fn generate_temp_html_with_classes() string {
+	mut temp_html := strings.new_builder(400)
+	temp_html.write_string('<!doctype html><html><head><title>Giant String</title></head><body>')
+	temp_html.write_string("<div class='single'>Single</div>")
+	for counter := 0; counter < 4; counter++ {
+		temp_html.write_string("<div id='name_${counter}' ")
+		temp_html.write_string("class='common'>Common No. ${counter}</div>")
+	}
+	temp_html.write_string("<div class='complex-0 complex-1 complex-2'>Complex</div>")
+	temp_html.write_string("<div class='complex-0 complex-2'>Partial</div>")
+	temp_html.write_string('</body></html>')
+	return temp_html.str()
+}
+
+fn test_search_by_class() {
+	dom := parse(generate_temp_html_with_classes())
+	single_class_tags := dom.get_tags_by_class_name('single')
+	common_class_tags := dom.get_tags_by_class_name('common')
+	complex_class_tags := dom.get_tags_by_class_name('complex-0', 'complex-1', 'complex-2')
+	partial_class_tags := dom.get_tags_by_class_name('complex-0', 'complex-2')
+	shuffled_class_tags := dom.get_tags_by_class_name('complex-2', 'complex-0', 'complex-1')
+	assert single_class_tags.len == 1
+	assert common_class_tags.len == 4
+	assert complex_class_tags.len == 1
+	assert complex_class_tags[0].attributes['class'] == 'complex-0 complex-1 complex-2'
+	assert partial_class_tags.len == 2
+	assert shuffled_class_tags.len == 1
+	assert shuffled_class_tags[0].attributes['class'] == 'complex-0 complex-1 complex-2'
+}
+
+fn test_unmatched_close_tag_is_ignored() {
+	content := '<!doctype html><html><body><div><a href="#">x</a></a></div><article class="news-post">hello</article></body></html>'
+	mut dom := parse(content)
+	by_attr := dom.get_tags_by_attribute_value('class', 'news-post')
+	by_class := dom.get_tags_by_class_name('news-post')
+	assert by_attr.len == 1
+	assert by_class.len == 1
+	assert by_class[0].name == 'article'
+}
+
+fn test_document_root_is_indexed() {
+	mut dom := parse('<div id="a" class="x">hi</div>')
+	assert dom.get_tags().len == 1
+	assert dom.get_tags(name: 'div').len == 1
+	assert dom.get_tags_by_attribute('id').len == 1
+	assert dom.get_tags_by_attribute_value('id', 'a').len == 1
+	assert dom.get_tags_by_class_name('x').len == 1
+}
+
+fn test_document_root_matches_its_own_classes() {
+	mut dom := parse('<div class="x"><p class="y">hi</p></div>')
+	assert dom.get_tags_by_class_name('x').len == 1
+	assert dom.get_tags_by_class_name('y').len == 1
+	assert dom.get_tags_by_attribute('class').len == 2
+}
+
+fn test_document_class_search_handles_empty_and_multiple_names() {
+	empty := parse('')
+	assert empty.get_tags_by_class_name('x').len == 0
+	mut dom := parse('<div class="x y"><p class="x">hi</p><span class="x y"></span></div>')
+	assert dom.get_tags_by_class_name().len == 0
+	matches := dom.get_tags_by_class_name('x', 'y')
+	assert matches.len == 2
+	assert matches[0].name == 'div'
+	assert matches[1].name == 'span'
+	assert dom.get_tags_by_class_name('x').len == 3
+	assert dom.get_tags(name: 'div')[0] == dom.get_root()
 }

@@ -1,10 +1,15 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license
 // that can be found in the LICENSE file.
+import math.big
 import math.fractions
 
 // (Old) results are verified using https://www.calculatorsoup.com/calculators/math/fractions.php
 // Newer ones are contrived for corner cases or prepared by hand.
+fn bi(s string) big.Integer {
+	return big.integer_from_string(s) or { panic(err) }
+}
+
 fn test_4_by_8_f64_and_str() {
 	f := fractions.fraction(4, 8)
 	assert f.f64() == 0.5
@@ -40,7 +45,7 @@ fn test_4_by_8_plus_5_by_10() {
 	sum := f1 + f2
 	assert sum.f64() == 1.0
 	assert sum.str() == '1/1'
-	assert sum.equals(fractions.fraction(1, 1))
+	assert sum == fractions.fraction(1, 1)
 }
 
 fn test_5_by_5_plus_8_by_8() {
@@ -49,7 +54,7 @@ fn test_5_by_5_plus_8_by_8() {
 	sum := f1 + f2
 	assert sum.f64() == 2.0
 	assert sum.str() == '2/1'
-	assert sum.equals(fractions.fraction(2, 1))
+	assert sum == fractions.fraction(2, 1)
 }
 
 fn test_9_by_3_plus_1_by_3() {
@@ -57,7 +62,7 @@ fn test_9_by_3_plus_1_by_3() {
 	f2 := fractions.fraction(1, 3)
 	sum := f1 + f2
 	assert sum.str() == '10/3'
-	assert sum.equals(fractions.fraction(10, 3))
+	assert sum == fractions.fraction(10, 3)
 }
 
 fn test_3_by_7_plus_1_by_4() {
@@ -65,7 +70,7 @@ fn test_3_by_7_plus_1_by_4() {
 	f2 := fractions.fraction(1, 4)
 	sum := f1 + f2
 	assert sum.str() == '19/28'
-	assert sum.equals(fractions.fraction(19, 28))
+	assert sum == fractions.fraction(19, 28)
 }
 
 fn test_36529_by_12409100000_plus_418754901_by_9174901000() {
@@ -226,44 +231,75 @@ fn test_reciprocal_1_by_4() {
 fn test_4_by_8_equals_5_by_10() {
 	f1 := fractions.fraction(4, 8)
 	f2 := fractions.fraction(5, 10)
-	assert f1.equals(f2)
+	assert f1 == f2
 }
 
 fn test_1_by_2_does_not_equal_3_by_4() {
 	f1 := fractions.fraction(1, 2)
 	f2 := fractions.fraction(3, 4)
-	assert !f1.equals(f2)
+	assert f1 != f2
 }
 
 fn test_reduce_3_by_9() {
 	f := fractions.fraction(3, 9)
-	assert f.reduce().equals(fractions.fraction(1, 3))
+	assert f.reduce() == fractions.fraction(1, 3)
 }
 
 fn test_1_by_3_less_than_2_by_4() {
 	f1 := fractions.fraction(1, 3)
 	f2 := fractions.fraction(2, 4)
-	assert f1.lt(f2)
-	assert f1.le(f2)
+	assert f1 < f2
+	assert f1 <= f2
 }
 
 fn test_2_by_3_greater_than_2_by_4() {
 	f1 := fractions.fraction(2, 3)
 	f2 := fractions.fraction(2, 4)
-	assert f1.gt(f2)
-	assert f1.ge(f2)
+	assert f1 > f2
+	assert f1 >= f2
 }
 
 fn test_5_by_7_not_less_than_2_by_4() {
 	f1 := fractions.fraction(5, 7)
 	f2 := fractions.fraction(2, 4)
-	assert !f1.lt(f2)
-	assert !f1.le(f2)
+	assert !(f1 < f2)
+	assert !(f1 <= f2)
 }
 
 fn test_49_by_75_not_greater_than_2_by_3() {
 	f1 := fractions.fraction(49, 75)
 	f2 := fractions.fraction(2, 3)
-	assert !f1.gt(f2)
-	assert !f1.ge(f2)
+	assert !(f1 > f2)
+	assert !(f1 >= f2)
+}
+
+fn test_i32_rational_addition() {
+	f1 := fractions.rational(i32(4), i32(8))
+	f2 := fractions.rational(i32(5), i32(10))
+	sum := f1 + f2
+	assert sum.str() == '1/1'
+	assert sum == fractions.rational(i32(1), i32(1))
+}
+
+fn test_big_fraction_normalizes_and_reduces() {
+	f := fractions.big_fraction(bi('-14'), bi('-21'))
+	assert f.str() == '14/21'
+	assert f.reciprocal().str() == '21/14'
+	assert f.reduce().str() == '2/3'
+}
+
+fn test_big_fraction_addition() {
+	f1 := fractions.big_fraction(bi('100000000000000000000000000000000000000'), bi('3'))
+	f2 := fractions.big_fraction(bi('5'), bi('6'))
+	sum := f1 + f2
+	assert sum.str() == '200000000000000000000000000000000000005/6'
+	assert sum > f1
+}
+
+fn test_big_fraction_exact_comparison_beyond_i64() {
+	huge := bi('9223372036854775808123456789')
+	f1 := fractions.big_fraction(huge + big.one_int, huge)
+	f2 := fractions.big_fraction(huge, huge + big.one_int)
+	assert f1 > f2
+	assert f1 != f2
 }

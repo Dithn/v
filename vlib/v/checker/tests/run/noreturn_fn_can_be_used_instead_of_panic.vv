@@ -1,10 +1,10 @@
-fn abc() ?int {
+fn abc() !int {
 	return error('oh no')
 }
 
-[noreturn]
+@[noreturn]
 fn log_and_die(e IError) {
-	eprintln('${@FN}: error: $e')
+	eprintln('${@FN}: error: ${e}')
 	exit(77)
 }
 

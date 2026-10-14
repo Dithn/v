@@ -1,5 +1,5 @@
 fn map_cb(s string) string {
-	return 'CB: $s'
+	return 'CB: ${s}'
 }
 
 fn filter_cb(n int) bool {
@@ -16,17 +16,28 @@ fn vararg_test() {
 	variadic(1, 2, 3)
 }
 
-// TODO Remove `fn main` once vet supports scripts
+// TODO: Remove `fn main` once vet supports scripts
 fn main() {
 	vararg_test()
+
+	// index initializations
+	list1 := []string{len: 3, init: 'Item ${index}'}
+	list2 := []string{len: 3, init: 'Item ${index}'}
+	list3 := []int{len: 3, init: index}
+	list4 := []string{len: 4, init: '${index}:${index * 2}'}
+	println(list1)
+	println(list2)
+	println(list1 == list2)
+	println(list3)
+	println(list4)
 
 	arr1 := ['Hello', 'JS', 'Backend']
 	mut arr2 := [1, 2, 3, 4, 5]
 
 	// Array slices
-	slice1 := arr1[1..3]
-	slice2 := arr2[..3]
-	slice3 := arr2[3..]
+	slice1 := unsafe { arr1[1..3] }
+	slice2 := unsafe { arr2[..3] }
+	slice3 := unsafe { arr2[3..] }
 
 	// Array indexes
 	idx1 := slice1[1]
@@ -45,7 +56,7 @@ fn main() {
 	println('\n\n')
 
 	// String slices
-	mut slice4 := idx1[..4]
+	mut slice4 := unsafe { idx1[..4] }
 	print('Back\t=> ')
 	println(slice4) // 'Back'
 
@@ -53,6 +64,7 @@ fn main() {
 	idx2 := slice4[0]
 	print('66\t=> ')
 	println(idx2)
+
 	// TODO:
 	// slice4[3] = `c`
 
@@ -75,7 +87,8 @@ fn main() {
 	println('badkey' !in m)
 
 	// for in
-	for _ in arr1 {}
+	for _ in arr1 {
+	}
 	println('0 to 8\t=>')
 	for i, _ in arr2 {
 		println(i)
@@ -90,11 +103,11 @@ fn main() {
 	println('\n\n')
 
 	// map
-	a := arr1.map('VAL: $it')
+	a := arr1.map('VAL: ${it}')
 	b := arr1.map(map_cb)
 	c := arr1.map(map_cb(it))
 	d := arr1.map(fn (a string) string {
-		return 'ANON: $a'
+		return 'ANON: ${a}'
 	})
 	// I don't know when this would ever be used,
 	// but it's what the C backend does ¯\_(ツ)_/¯
@@ -129,8 +142,8 @@ fn main() {
 	f4 := [u64(0xffffffffffffffff), 0xdeadface]!
 
 	println('
-$f1
-$f2
-$f3
-$f4')
+${f1}
+${f2}
+${f3}
+${f4}')
 }

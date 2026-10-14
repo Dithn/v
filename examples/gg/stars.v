@@ -1,17 +1,14 @@
 module main
 
-import os
+import os.asset
 import gg
-import gx
 import rand
 import sokol.sgl
 
-const (
-	win_width     = 800
-	win_height    = 600
-	max_stars     = 5000
-	max_v_letters = 5
-)
+const win_width = 800
+const win_height = 600
+const max_stars = 5000
+const max_v_letters = 5
 
 struct Star {
 mut:
@@ -37,7 +34,7 @@ mut:
 
 struct App {
 mut:
-	gg        &gg.Context
+	gg        &gg.Context = unsafe { nil }
 	image     gg.Image
 	stars     []Star
 	v_letters []VLetter
@@ -45,43 +42,43 @@ mut:
 
 fn main() {
 	mut app := &App{
-		gg: 0
-		stars: []Star{len: max_stars}
+		stars:     []Star{len: max_stars}
 		v_letters: []VLetter{len: max_v_letters}
 	}
 	app.gg = gg.new_context(
-		bg_color: gx.black
-		width: win_width
-		height: win_height
+		bg_color:      gg.black
+		width:         win_width
+		height:        win_height
 		create_window: true
-		window_title: 'Star Vield'
-		frame_fn: frame
-		init_fn: init_images
-		user_data: app
+		window_title:  'Star Vield'
+		frame_fn:      frame
+		init_fn:       init_images
+		user_data:     app
 	)
 	for i in 0 .. max_stars {
-		app.stars[i].x = rand.f32_in_range(-200.0, 200.0)
-		app.stars[i].y = rand.f32_in_range(-200.0, 200.0)
-		app.stars[i].z = rand.f32_in_range(-200.0, -100.0)
-		app.stars[i].r = rand.f32_in_range(0.1, 1.0)
-		app.stars[i].g = rand.f32_in_range(0.1, 1.0)
-		app.stars[i].b = rand.f32_in_range(0.1, 1.0)
+		app.stars[i].x = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
+		app.stars[i].y = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
+		app.stars[i].z = rand.f32_in_range(-200.0, -100.0) or { -200.0 }
+		app.stars[i].r = rand.f32_in_range(0.1, 1.0) or { 0.1 }
+		app.stars[i].g = rand.f32_in_range(0.1, 1.0) or { 0.1 }
+		app.stars[i].b = rand.f32_in_range(0.1, 1.0) or { 0.1 }
 	}
 	for i in 0 .. max_v_letters {
-		app.v_letters[i].x = rand.f32_in_range(-20.0, 20.0)
-		app.v_letters[i].y = rand.f32_in_range(-20.0, 20.0)
-		app.v_letters[i].z = rand.f32_in_range(-5.0, -1.0)
-		app.v_letters[i].w = rand.f32_in_range(5, 20)
+		app.v_letters[i].x = rand.f32_in_range(-20.0, 20.0) or { -20.0 }
+		app.v_letters[i].y = rand.f32_in_range(-20.0, 20.0) or { -20.0 }
+		app.v_letters[i].z = rand.f32_in_range(-5.0, -1.0) or { -5.0 }
+		app.v_letters[i].w = rand.f32_in_range(5, 20) or { 5 }
 		app.v_letters[i].h = app.v_letters[i].w
-		app.v_letters[i].angle = rand.f32_in_range(0, 6.283184)
-		app.v_letters[i].dangle = rand.f32_in_range(-0.05, 0.05)
-		app.v_letters[i].dz = rand.f32_in_range(-0.1, -0.01)
+		app.v_letters[i].angle = rand.f32_in_range(0, 6.283184) or { 0 }
+		app.v_letters[i].dangle = rand.f32_in_range(-0.05, 0.05) or { -0.05 }
+		app.v_letters[i].dz = rand.f32_in_range(-0.1, -0.01) or { -0.1 }
 	}
 	app.gg.run()
 }
 
 fn init_images(mut app App) {
-	app.image = app.gg.create_image(os.resource_abs_path('logo.png'))
+	logo_path := asset.get_path('../assets', 'logo.png')
+	app.image = app.gg.create_image(logo_path) or { panic(err) }
 }
 
 fn frame(mut app App) {
@@ -101,9 +98,9 @@ fn (mut app App) draw() {
 		sgl.v3f_c3f(s.x, s.y, s.z, s.r, s.g, s.b)
 		app.stars[i].z += 0.3
 		if app.stars[i].z > -1.0 {
-			app.stars[i].x = rand.f32_in_range(-200.0, 200.0)
-			app.stars[i].y = rand.f32_in_range(-200.0, 200.0)
-			app.stars[i].z = rand.f32_in_range(-200.0, -100.0)
+			app.stars[i].x = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
+			app.stars[i].y = rand.f32_in_range(-200.0, 200.0) or { -200.0 }
+			app.stars[i].z = rand.f32_in_range(-200.0, -100.0) or { -200.0 }
 		}
 	}
 	sgl.end()
@@ -118,15 +115,15 @@ fn (mut app App) draw() {
 		app.v_letters[i].z += app.v_letters[i].dz
 		app.v_letters[i].angle += app.v_letters[i].dangle
 		if app.v_letters[i].z > -60.0 {
-			app.v_letters[i].x += rand.f32_in_range(-0.05, 0.05)
-			app.v_letters[i].y += rand.f32_in_range(-0.05, 0.05)
+			app.v_letters[i].x += rand.f32_in_range(-0.05, 0.05) or { -0.05 }
+			app.v_letters[i].y += rand.f32_in_range(-0.05, 0.05) or { -0.05 }
 		}
 		if app.v_letters[i].z < -95.0 {
 			app.v_letters[i].h *= 0.8
 			app.v_letters[i].w *= 0.8
 		}
 		if app.v_letters[i].z < -100.0 {
-			app.v_letters[i].z = rand.f32_in_range(-5.0, -1.0)
+			app.v_letters[i].z = rand.f32_in_range(-5.0, -1.0) or { -5.0 }
 			app.v_letters[i].h = 10.0
 			app.v_letters[i].w = 10.0
 		}

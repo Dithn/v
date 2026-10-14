@@ -1,5 +1,6 @@
 import os
 import term
+import strings
 
 fn test_get_terminal_size() {
 	cols, _ := term.get_terminal_size()
@@ -58,27 +59,27 @@ fn test_header() {
 }
 
 fn test_get_cursor_position() {
-	original_position := term.get_cursor_position()
-	cursor_position_1 := term.get_cursor_position()
+	original_position := term.get_cursor_position()!
+	cursor_position_1 := term.get_cursor_position()!
 	assert original_position.x == cursor_position_1.x
 	assert original_position.y == cursor_position_1.y
-	//
+
 	term.set_cursor_position(
 		x: 10
 		y: 11
 	)
-	cursor_position_2 := term.get_cursor_position()
-	//
+	cursor_position_2 := term.get_cursor_position()!
+
 	term.set_cursor_position(
 		x: 5
 		y: 6
 	)
-	cursor_position_3 := term.get_cursor_position()
-	//
+	cursor_position_3 := term.get_cursor_position()!
+
 	term.set_cursor_position(original_position)
-	eprintln('original_position: $original_position')
-	eprintln('cursor_position_2: $cursor_position_2')
-	eprintln('cursor_position_3: $cursor_position_3')
+	eprintln('original_position: ${original_position}')
+	eprintln('cursor_position_2: ${cursor_position_2}')
+	eprintln('cursor_position_3: ${cursor_position_3}')
 	// 0,0 is returned on dumb terminals
 	if cursor_position_2.x == 0 && cursor_position_2.y == 0 {
 		return
@@ -97,19 +98,48 @@ fn test_set_terminal_title() {
 	if os.getenv('CI') != 'true' {
 		return
 	}
-	title_change := term.set_terminal_title('v is awesome!')
-	assert title_change == true
+	term.set_terminal_title('v is awesome!')
+	dump(@FILE)
+	assert true
+}
+
+fn test_set_tab_title() {
+	// do not change the current terminal tab title outside of CI:
+	if os.getenv('CI') != 'true' {
+		return
+	}
+	term.set_tab_title('v is awesome!')
+	dump(@FILE)
+	assert true
 }
 
 fn test_strip_ansi() {
-	strings := [
+	string_list := [
 		'abc',
 		term.bold('abc'),
 		term.yellow('abc'),
 		term.bold(term.red('abc')),
 		term.strikethrough(term.inverse(term.dim(term.bold(term.bright_bg_blue('abc'))))),
 	]
-	for s in strings {
+	for s in string_list {
 		assert term.strip_ansi(s) == 'abc'
 	}
+}
+
+fn test_write_color() {
+	mut sb := strings.new_builder(100)
+	term.writeln_color(mut sb, 'hello')
+	term.writeln_color(mut sb, 'hello', fg: .red)
+	term.writeln_color(mut sb, 'hello', bg: .cyan)
+	term.writeln_color(mut sb, 'hello', styles: [.bold, .italic, .underline], fg: .red, bg: .cyan)
+	term.writeln_color(mut sb, 'hello', custom: '38;5;214')
+
+	output := sb.str()
+	println(output)
+
+	assert output.contains('\x1b[0m')
+	assert output.contains('\x1b[31m')
+	assert output.contains('\x1b[46m')
+	assert output.contains('\x1b[1;3;4;31;46m')
+	assert output.contains('\x1b[38;5;214m')
 }

@@ -1,19 +1,19 @@
 fn test_isnil_byteptr() {
-	pb := &byte(0)
+	pb := &u8(unsafe { nil })
 	assert isnil(pb)
 }
 
 fn test_isnil_voidptr() {
-	pv := voidptr(0)
+	pv := unsafe { nil }
 	assert isnil(pv)
 }
 
 fn test_isnil_charptr() {
-	pc := &char(0)
+	pc := &char(unsafe { nil })
 	assert isnil(pc)
 }
 
 fn test_isnil_intptr() {
-	pi := &int(0)
+	pi := &int(unsafe { nil })
 	assert isnil(pi)
 }

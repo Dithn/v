@@ -1,158 +1,50 @@
-// Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
+// Copyright (c) 2019-2024 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
 module gg
 
-// import gx
-// import sokol.sapp
-import sokol.gfx
-import os
-import sokol
-import sokol.sgl
-import stbi
-
-[heap]
-pub struct Image {
-pub mut:
-	id          int
-	width       int
-	height      int
-	nr_channels int
-	ok          bool
-	data        voidptr
-	ext         string
-	simg_ok     bool
-	simg        C.sg_image
-	path        string
+// TextureFilter controls how gg samples textures when images are scaled.
+pub enum TextureFilter {
+	linear
+	nearest
 }
 
 // DrawImageConfig struct defines the various options
 // that can be used to draw an image onto the screen
 pub struct DrawImageConfig {
-pub:
-	flip_x    bool
-	flip_y    bool
-	img       &Image = voidptr(0)
+pub mut:
+	flip_x    bool // set to true, if you need to flip the image horizontally (around a vertical axis), <- will become ->
+	flip_y    bool // set to true, if you need to flip the image vertically (around a horizontal axiz), -\/- will become -/\-
+	img       &Image = unsafe { nil }
 	img_id    int
 	img_rect  Rect // defines the size and position on image when rendering to the screen
 	part_rect Rect // defines the size and position of part of the image to use when rendering
-	rotate    int  // amount to rotate the image in degrees
 	z         f32
+	color     Color       = white
+	effect    ImageEffect = .alpha
+
+	rotation f32 // the amount to rotate the image in degrees, counterclockwise. Use a negative value, to rotate it clockwise.
 }
 
+pub enum ImageEffect {
+	// TODO(FireRedz): Add more effects
+	alpha
+	add
+}
+
+// Rect represents a rectangular shape in `gg`.
 pub struct Rect {
-pub:
+pub mut:
 	x      f32
 	y      f32
 	width  f32
 	height f32
 }
 
-fn C.sg_isvalid() bool
-
-// TODO return ?Image
-pub fn (mut ctx Context) create_image(file string) Image {
-	// println('\ncreate_image("$file")')
-	if !os.exists(file) {
-		return Image{}
-	}
-	$if macos {
-		if ctx.native_rendering {
-			// return C.darwin_create_image(file)
-			mut img := C.darwin_create_image(file)
-			// println('created macos image: $img.path w=$img.width')
-			// C.printf('p = %p\n', img.data)
-			img.id = ctx.image_cache.len
-			ctx.image_cache << img
-			return img
-		}
-	}
-	if !C.sg_isvalid() {
-		// Sokol is not initialized yet, add stbi object to a queue/cache
-		// ctx.image_queue << file
-		stb_img := stbi.load(file) or { return Image{} }
-		img := Image{
-			width: stb_img.width
-			height: stb_img.height
-			nr_channels: stb_img.nr_channels
-			ok: false
-			data: stb_img.data
-			ext: stb_img.ext
-			path: file
-			id: ctx.image_cache.len
-		}
-		ctx.image_cache << img
-		return img
-	}
-	mut img := create_image(file)
-	img.id = ctx.image_cache.len
-	ctx.image_cache << img
-	return img
-}
-
-// TODO copypasta
-pub fn (mut ctx Context) create_image_with_size(file string, width int, height int) Image {
-	if !C.sg_isvalid() {
-		// Sokol is not initialized yet, add stbi object to a queue/cache
-		// ctx.image_queue << file
-		stb_img := stbi.load(file) or { return Image{} }
-		img := Image{
-			width: width
-			height: height
-			nr_channels: stb_img.nr_channels
-			ok: false
-			data: stb_img.data
-			ext: stb_img.ext
-			path: file
-			id: ctx.image_cache.len
-		}
-		ctx.image_cache << img
-		return img
-	}
-	mut img := create_image(file)
-	img.id = ctx.image_cache.len
-	ctx.image_cache << img
-	return img
-}
-
-// TODO remove this
-fn create_image(file string) Image {
-	if !os.exists(file) {
-		println('gg.create_image(): file not found: $file')
-		return Image{} // none
-	}
-	stb_img := stbi.load(file) or { return Image{} }
-	mut img := Image{
-		width: stb_img.width
-		height: stb_img.height
-		nr_channels: stb_img.nr_channels
-		ok: stb_img.ok
-		data: stb_img.data
-		ext: stb_img.ext
-		path: file
-	}
-	img.init_sokol_image()
-	return img
-}
-
-pub fn (mut ctx Context) create_image_from_memory(buf &byte, bufsize int) Image {
-	stb_img := stbi.load_from_memory(buf, bufsize) or { return Image{} }
-	mut img := Image{
-		width: stb_img.width
-		height: stb_img.height
-		nr_channels: stb_img.nr_channels
-		ok: stb_img.ok
-		data: stb_img.data
-		ext: stb_img.ext
-		id: ctx.image_cache.len
-	}
-	ctx.image_cache << img
-	return img
-}
-
-pub fn (mut ctx Context) create_image_from_byte_array(b []byte) Image {
-	return ctx.create_image_from_memory(b.data, b.len)
-}
-
+// cache_image caches the image `img` in memory for later reuse.
+// cache_image returns the cache index of the cached image.
+//
+// See also: get_cached_image_by_idx
+// See also: remove_cached_image_by_idx
 pub fn (mut ctx Context) cache_image(img Image) int {
 	ctx.image_cache << img
 	image_idx := ctx.image_cache.len - 1
@@ -160,161 +52,31 @@ pub fn (mut ctx Context) cache_image(img Image) int {
 	return image_idx
 }
 
+const missing_image = Image{}
+
+// get_cached_image_by_idx returns a cached `Image` identified by `image_idx`.
+// If image not found, returns `Image{ok: false}`
+//
+// See also: cache_image
+// See also: remove_cached_image_by_idx
 pub fn (mut ctx Context) get_cached_image_by_idx(image_idx int) &Image {
+	if image_idx < 0 || image_idx > ctx.image_cache.len - 1 {
+		return unsafe { &missing_image }
+	}
 	return &ctx.image_cache[image_idx]
 }
 
-pub fn (mut img Image) init_sokol_image() &Image {
-	// println('\n init sokol image $img.path ok=$img.simg_ok')
-	mut img_desc := C.sg_image_desc{
-		width: img.width
-		height: img.height
-		num_mipmaps: 0
-		wrap_u: .clamp_to_edge
-		wrap_v: .clamp_to_edge
-		label: img.path.str
-		d3d11_texture: 0
-	}
-	img_desc.data.subimage[0][0] = C.sg_range{
-		ptr: img.data
-		size: size_t(img.nr_channels * img.width * img.height)
-	}
-	img.simg = C.sg_make_image(&img_desc)
-	img.simg_ok = true
-	img.ok = true
-	return img
-}
-
-pub struct StreamingImageConfig {
-	pixel_format gfx.PixelFormat = .rgba8
-	wrap_u       gfx.Wrap        = .clamp_to_edge
-	wrap_v       gfx.Wrap        = .clamp_to_edge
-	min_filter   gfx.Filter      = .linear
-	mag_filter   gfx.Filter      = .linear
-	num_mipmaps  int = 1
-	num_slices   int = 1
-}
-
-// new_streaming_image returns a cached `image_idx` of a special image, that
-// can be updated *each frame* by calling:  gg.update_pixel_data(image_idx, buf)
-// ... where buf is a pointer to the actual pixel data for the image.
-// NB: you still need to call app.gg.draw_image after that, to actually draw it.
-pub fn (mut ctx Context) new_streaming_image(w int, h int, channels int, sicfg StreamingImageConfig) int {
-	mut img := Image{}
-	img.width = w
-	img.height = h
-	img.nr_channels = channels // 4 bytes per pixel for .rgba8, see pixel_format
-	mut img_desc := C.sg_image_desc{
-		width: img.width
-		height: img.height
-		pixel_format: sicfg.pixel_format
-		num_slices: 1
-		num_mipmaps: 1
-		usage: .stream
-		wrap_u: sicfg.wrap_u
-		wrap_v: sicfg.wrap_v
-		min_filter: sicfg.min_filter
-		mag_filter: sicfg.mag_filter
-		label: img.path.str
-	}
-	// Sokol requires that streamed images have NO .ptr/.size initially:
-	img_desc.data.subimage[0][0] = C.sg_range{
-		ptr: 0
-		size: size_t(0)
-	}
-	img.simg = C.sg_make_image(&img_desc)
-	img.simg_ok = true
-	img.ok = true
-	img_idx := ctx.cache_image(img)
-	return img_idx
-}
-
-// update_pixel_data is a helper for working with image streams (i.e. images,
-// that are updated dynamically by the CPU on each frame)
-pub fn (mut ctx Context) update_pixel_data(cached_image_idx int, buf &byte) {
-	mut image := ctx.get_cached_image_by_idx(cached_image_idx)
-	image.update_pixel_data(buf)
-}
-
-pub fn (mut img Image) update_pixel_data(buf &byte) {
-	mut data := C.sg_image_data{}
-	data.subimage[0][0].ptr = buf
-	data.subimage[0][0].size = size_t(img.width * img.height * img.nr_channels)
-	gfx.update_image(img.simg, &data)
-}
-
-// draw_image_with_config takes in a config that details how the
-// provided image should be drawn onto the screen
-pub fn (ctx &Context) draw_image_with_config(config DrawImageConfig) {
-	id := if !isnil(config.img) { config.img.id } else { config.img_id }
-	if id >= ctx.image_cache.len {
-		eprintln('gg: draw_image() bad img id $id (img cache len = $ctx.image_cache.len)')
+// remove_cached_image_by_idx removes an `Image` identified by `image_idx` from the
+// image cache.
+//
+// See also: cache_image
+// See also: get_cached_image_by_idx
+pub fn (mut ctx Context) remove_cached_image_by_idx(image_idx int) {
+	if image_idx < 0 || image_idx > ctx.image_cache.len - 1 {
 		return
 	}
-
-	img := ctx.image_cache[id]
-	if !img.simg_ok {
-		return
-	}
-
-	mut img_rect := config.img_rect
-	if img_rect.width == 0 && img_rect.height == 0 {
-		img_rect = Rect{img_rect.x, img_rect.y, img.width, img.height}
-	}
-
-	mut part_rect := config.part_rect
-	if part_rect.width == 0 && part_rect.height == 0 {
-		part_rect = Rect{part_rect.x, part_rect.y, img.width, img.height}
-	}
-
-	u0 := part_rect.x / img.width
-	v0 := part_rect.y / img.height
-	u1 := (part_rect.x + part_rect.width) / img.width
-	v1 := (part_rect.y + part_rect.height) / img.height
-	x0 := img_rect.x * ctx.scale
-	y0 := img_rect.y * ctx.scale
-	x1 := (img_rect.x + img_rect.width) * ctx.scale
-	mut y1 := (img_rect.y + img_rect.height) * ctx.scale
-	if img_rect.height == 0 {
-		scale := f32(img.width) / f32(img_rect.width)
-		y1 = f32(img_rect.y + int(f32(img.height) / scale)) * ctx.scale
-	}
-
-	flip_x := config.flip_x
-	flip_y := config.flip_y
-
-	mut u0f := if !flip_x { u0 } else { u1 }
-	mut u1f := if !flip_x { u1 } else { u0 }
-	mut v0f := if !flip_y { v0 } else { v1 }
-	mut v1f := if !flip_y { v1 } else { v0 }
-
-	sgl.load_pipeline(ctx.timage_pip)
-	sgl.enable_texture()
-	sgl.texture(img.simg)
-
-	if config.rotate != 0 {
-		width := img_rect.width * ctx.scale
-		height := (if img_rect.height > 0 { img_rect.height } else { img.height }) * ctx.scale
-
-		sgl.push_matrix()
-		sgl.translate(x0 + (width / 2), y0 + (height / 2), 0)
-		sgl.rotate(sgl.rad(-config.rotate), 0, 0, 1)
-		sgl.translate(-x0 - (width / 2), -y0 - (height / 2), 0)
-	}
-
-	sgl.begin_quads()
-	sgl.c4b(255, 255, 255, 255)
-	sgl.v3f_t2f(x0, y0, config.z, u0f, v0f)
-	sgl.v3f_t2f(x1, y0, config.z, u1f, v0f)
-	sgl.v3f_t2f(x1, y1, config.z, u1f, v1f)
-	sgl.v3f_t2f(x0, y1, config.z, u0f, v1f)
-	sgl.end()
-
-	if config.rotate != 0 {
-		sgl.pop_matrix()
-	}
-
-	sgl.disable_texture()
+	ctx.image_cache[image_idx].destroy()
+	ctx.image_cache[image_idx] = unsafe { &missing_image }
 }
 
 // Draw part of an image using uv coordinates
@@ -325,43 +87,17 @@ pub fn (ctx &Context) draw_image_with_config(config DrawImageConfig) {
 // draw_image_part(Rect{0, 0, 600, 600}, Rect{0, 0, 400, 400}, img)
 pub fn (ctx &Context) draw_image_part(img_rect Rect, part_rect Rect, img_ &Image) {
 	ctx.draw_image_with_config(
-		img: img_
-		img_rect: img_rect
+		img:       img_
+		img_rect:  img_rect
 		part_rect: part_rect
-	)
-}
-
-// draw_image draws the provided image onto the screen
-pub fn (ctx &Context) draw_image(x f32, y f32, width f32, height f32, img_ &Image) {
-	$if macos {
-		if img_.id >= ctx.image_cache.len {
-			eprintln('gg: draw_image() bad img id $img_.id (img cache len = $ctx.image_cache.len)')
-			return
-		}
-		if ctx.native_rendering {
-			if img_.width == 0 {
-				return
-			}
-			if !os.exists(img_.path) {
-				return
-			}
-			C.darwin_draw_image(x, ctx.height - (y + height), width, height, img_)
-			return
-		}
-	}
-
-	ctx.draw_image_with_config(
-		img: img_
-		img_rect: Rect{x, y, width, height}
-		part_rect: Rect{0, 0, img_.width, img_.height}
 	)
 }
 
 // draw_image_flipped draws the provided image flipped horizontally (use `draw_image_with_config` to flip vertically)
 pub fn (ctx &Context) draw_image_flipped(x f32, y f32, width f32, height f32, img_ &Image) {
 	ctx.draw_image_with_config(
-		flip_x: true
-		img: img_
+		flip_x:   true
+		img:      img_
 		img_rect: Rect{x, y, width, height}
 	)
 }
@@ -369,7 +105,7 @@ pub fn (ctx &Context) draw_image_flipped(x f32, y f32, width f32, height f32, im
 // draw_image_by_id draws an image by its id
 pub fn (ctx &Context) draw_image_by_id(x f32, y f32, width f32, height f32, id int) {
 	ctx.draw_image_with_config(
-		img_id: id
+		img_id:   id
 		img_rect: Rect{x, y, width, height}
 	)
 }
@@ -377,8 +113,8 @@ pub fn (ctx &Context) draw_image_by_id(x f32, y f32, width f32, height f32, id i
 // draw_image_3d draws an image with a z depth
 pub fn (ctx &Context) draw_image_3d(x f32, y f32, z f32, width f32, height f32, img_ &Image) {
 	ctx.draw_image_with_config(
-		img: img_
+		img:      img_
 		img_rect: Rect{x, y, width, height}
-		z: z
+		z:        z
 	)
 }

@@ -142,7 +142,8 @@ fn test_complex_angle() {
 	c = cmplx.complex(-1, -1)
 	assert c.angle() * 180 / math.pi == -135
 	cc := c.conjugate()
-	assert cc.angle() + c.angle() == 0
+	a := cc.angle()
+	assert a + c.angle() == 0
 }
 
 fn test_complex_addinv() {
@@ -167,8 +168,6 @@ fn test_complex_mulinv() {
 	mut c2 := cmplx.complex(0.067568, -0.094595)
 	mut result := c1.mulinv()
 	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	println(c2.str())
-	println(result.str())
 	assert result.str() == c2.str()
 	c1 = cmplx.complex(-3, 4)
 	c2 = cmplx.complex(-0.12, -0.16)
@@ -274,64 +273,58 @@ fn test_complex_ln() {
 fn test_complex_arg() {
 	// Tests were also verified on Wolfram Alpha
 	mut c1 := cmplx.complex(5, 7)
-	mut c2 := cmplx.complex(2.152033, 0.950547)
 	mut result := c1.arg()
 	// Some issue with precision comparison in f64 using == operator hence serializing to string
 	assert tst_res(result.str(), '0.950547')
 	c1 = cmplx.complex(-3, 4)
-	c2 = cmplx.complex(1.609438, 2.214297)
 	result = c1.arg()
 	// Some issue with precision comparison in f64 using == operator hence serializing to string
 	assert tst_res(result.str(), '2.214297')
 	c1 = cmplx.complex(-1, -2)
-	c2 = cmplx.complex(0.804719, -2.034444)
 	result = c1.arg()
 	// Some issue with precision comparison in f64 using == operator hence serializing to string
 	assert tst_res(result.str(), '-2.034444')
 }
 
 fn test_complex_log() {
-	// Tests were also verified on Wolfram Alpha
-	mut c1 := cmplx.complex(5, 7)
-	mut b1 := cmplx.complex(-6, -2)
-	mut c2 := cmplx.complex(0.232873, -1.413175)
-	mut result := c1.log(b1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
-	c1 = cmplx.complex(-3, 4)
-	b1 = cmplx.complex(3, -1)
-	c2 = cmplx.complex(0.152198, -0.409312)
-	result = c1.log(b1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
-	c1 = cmplx.complex(-1, -2)
-	b1 = cmplx.complex(0, 9)
-	c2 = cmplx.complex(-0.298243, 1.197981)
-	result = c1.log(b1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
+	a := cmplx.complex(11.22, 33.44)
+	b := cmplx.complex(55.66, 77.88)
+	c := a.log(b)
+	assert c.re.eq_epsilon(0.8032210844549097)
+	assert c.im.eq_epsilon(0.10605953671930149)
 }
 
 fn test_complex_cpow() {
 	// Tests were also verified on Wolfram Alpha
+	// Compare components with a relative tolerance, not their six-decimal string representations.
 	mut c1 := cmplx.complex(5, 7)
 	mut r1 := cmplx.complex(2, 2)
-	mut c2 := cmplx.complex(11.022341, -0.861785)
+	mut c2 := cmplx.complex(11.022341383437885, -0.8617846752979512)
 	mut result := c1.cpow(r1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
+	assert math.tolerance(result.re, c2.re, 1e-12)
+	assert math.tolerance(result.im, c2.im, 1e-12)
 	c1 = cmplx.complex(-3, 4)
 	r1 = cmplx.complex(-4, -2)
-	c2 = cmplx.complex(0.118303, 0.063148)
+	c2 = cmplx.complex(0.11830308266427136, 0.06314782471160102)
 	result = c1.cpow(r1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
+	assert math.tolerance(result.re, c2.re, 1e-12)
+	assert math.tolerance(result.im, c2.im, 1e-12)
 	c1 = cmplx.complex(-1, -2)
 	r1 = cmplx.complex(8, -9)
-	c2 = cmplx.complex(-0.000000, 0.000007)
+	// Keep the small nonzero real component instead of rounding it to negative zero.
+	c2 = cmplx.complex(-3.0654942406302415e-7, 6.974787551119013e-6)
 	result = c1.cpow(r1)
-	// Some issue with precision comparison in f64 using == operator hence serializing to string
-	assert result.str() == c2.str()
+	assert math.tolerance(result.re, c2.re, 1e-12)
+	assert math.tolerance(result.im, c2.im, 1e-12)
+}
+
+fn test_complex_cpow_conjugate_small_components() {
+	c := cmplx.complex(-1, 2)
+	p := cmplx.complex(8, 9)
+	result := c.cpow(p)
+	// The conjugate case must retain both small negative components, not round them to zero.
+	assert math.tolerance(result.re, -3.0654942406302415e-7, 1e-12)
+	assert math.tolerance(result.im, -6.974787551119013e-6, 1e-12)
 }
 
 fn test_complex_sin() {

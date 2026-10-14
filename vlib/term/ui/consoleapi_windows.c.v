@@ -1,6 +1,6 @@
 module ui
 
-union C.Event {
+pub union C.Event {
 	KeyEvent              C.KEY_EVENT_RECORD
 	MouseEvent            C.MOUSE_EVENT_RECORD
 	WindowBufferSizeEvent C.WINDOW_BUFFER_SIZE_RECORD
@@ -8,20 +8,21 @@ union C.Event {
 	FocusEvent            C.FOCUS_EVENT_RECORD
 }
 
-[typedef]
-struct C.INPUT_RECORD {
+@[typedef]
+pub struct C.INPUT_RECORD {
 	EventType u16
 	Event     C.Event
 }
 
-union C.uChar {
+pub union C.uChar {
+mut:
 	UnicodeChar rune
-	AsciiChar   byte
+	AsciiChar   u8
 }
 
-[typedef]
-struct C.KEY_EVENT_RECORD {
-	bKeyDown          int
+@[typedef]
+pub struct C.KEY_EVENT_RECORD {
+	bKeyDown          i32 // Windows BOOL == C `int` (4 bytes)
 	wRepeatCount      u16
 	wVirtualKeyCode   u16
 	wVirtualScanCode  u16
@@ -29,45 +30,48 @@ struct C.KEY_EVENT_RECORD {
 	dwControlKeyState u32
 }
 
-[typedef]
-struct C.MOUSE_EVENT_RECORD {
+@[typedef]
+pub struct C.MOUSE_EVENT_RECORD {
 	dwMousePosition   C.COORD
 	dwButtonState     u32
 	dwControlKeyState u32
 	dwEventFlags      u32
 }
 
-[typedef]
-struct C.WINDOW_BUFFER_SIZE_RECORD {
+@[typedef]
+pub struct C.WINDOW_BUFFER_SIZE_RECORD {
 	dwSize C.COORD
 }
 
-[typedef]
-struct C.MENU_EVENT_RECORD {
+@[typedef]
+pub struct C.MENU_EVENT_RECORD {
 	dwCommandId u32
 }
 
-[typedef]
-struct C.FOCUS_EVENT_RECORD {
-	bSetFocus int
+@[typedef]
+pub struct C.FOCUS_EVENT_RECORD {
+	bSetFocus i32 // Windows BOOL == C `int` (4 bytes)
 }
 
-[typedef]
-struct C.COORD {
+@[typedef]
+pub struct C.COORD {
+mut:
 	X i16
 	Y i16
 }
 
-[typedef]
-struct C.SMALL_RECT {
+@[typedef]
+pub struct C.SMALL_RECT {
+mut:
 	Left   u16
 	Top    u16
 	Right  u16
 	Bottom u16
 }
 
-[typedef]
-struct C.CONSOLE_SCREEN_BUFFER_INFO {
+@[typedef]
+pub struct C.CONSOLE_SCREEN_BUFFER_INFO {
+mut:
 	dwSize              C.COORD
 	dwCursorPosition    C.COORD
 	wAttributes         u16

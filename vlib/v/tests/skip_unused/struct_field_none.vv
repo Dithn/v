@@ -1,0 +1,10 @@
+import json2
+
+pub struct Struct {
+	version ?int // = none
+}
+
+fn main() {
+	s := Struct{}
+	println('${json2.encode(s)}')
+}

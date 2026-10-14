@@ -1,4 +1,4 @@
-import json
+import json2 as json
 
 struct User {
 	name string
@@ -9,21 +9,21 @@ mut:
 
 fn main() {
 	s := '[{ "name":"Frodo", "age":25}, {"name":"Bobby", "age":10}]'
-	mut users := json.decode([]User, s) or {
+	mut users := json.decode[[]User](s) or {
 		eprintln('Failed to parse json')
 		return
 	}
 	for user in users {
-		println('$user.name: $user.age')
+		println('${user.name}: ${user.age}')
 	}
 	println('')
 	for i, user in users {
-		println('$i) $user.name')
+		println('${i}) ${user.name}')
 		if !user.can_register() {
-			println('Cannot register $user.name, they are too young')
+			println('Cannot register ${user.name}, they are too young')
 		} else {
 			users[i].register()
-			println('$user.name is registered')
+			println('${user.name} is registered')
 		}
 	}
 	// Let's encode users again just for fun

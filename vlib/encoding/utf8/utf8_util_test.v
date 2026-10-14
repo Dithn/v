@@ -23,7 +23,7 @@ fn test_utf8_util() {
 	a := '.abc?abcòàè.'
 	assert utf8.is_punct(a, 0) == true
 	assert utf8.is_punct('b', 0) == false
-	assert utf8.is_uchar_punct(0x002E) == true
+	assert utf8.is_rune_punct(0x002E) == true
 	assert utf8.is_punct(a, 4) == true // ?
 	assert utf8.is_punct(a, 14) == true // last .
 	assert utf8.is_punct(a, 12) == false // è
@@ -33,12 +33,120 @@ fn test_utf8_util() {
 	b := '.ĂĂa. ÔÔ TESTO Æ€'
 	assert utf8.is_global_punct(b, 0) == true
 	assert utf8.is_global_punct('.', 0) == true
-	assert utf8.is_uchar_punct(0x002E) == true
+	assert utf8.is_rune_punct(0x002E) == true
 	assert utf8.is_global_punct(b, 6) == true // .
 	assert utf8.is_global_punct(b, 1) == false // a
 
 	// test utility functions
-	assert utf8.get_uchar(b, 0) == 0x002E
+	assert utf8.get_rune(b, 0) == 0x002E
+	c := 'a©★🚀'
+	assert utf8.get_rune(c, 0) == `a` // 1 byte
+	assert utf8.get_rune(c, 1) == `©` // 2 bytes
+	assert utf8.get_rune(c, 3) == `★` // 3 bytes
+	assert utf8.get_rune(c, 6) == `🚀` // 4 bytes
+}
+
+fn test_get_rune_invalid_utf8() {
+	replacement := rune(0xfffd)
+	invalid := [u8(0xc1), 0xa1, `-`, 0xed, 0xa0, 0x80, `-`, 0xc3].bytestr()
+	assert utf8.get_rune(invalid, 0) == replacement
+	assert utf8.get_rune(invalid, 1) == replacement
+	assert utf8.get_rune(invalid, 2) == `-`
+	assert utf8.get_rune(invalid, 3) == replacement
+	assert utf8.get_rune(invalid, 4) == replacement
+	assert utf8.get_rune(invalid, 5) == replacement
+	assert utf8.get_rune(invalid, 6) == `-`
+	assert utf8.get_rune(invalid, 7) == replacement
+}
+
+fn test_get_rune_out_of_range_is_not_nul() {
+	replacement := rune(0xfffd)
+	assert utf8.get_rune('', 0) == replacement
+	assert utf8.get_rune('', 1) == replacement
+	assert utf8.get_rune('a', -1) == replacement
+	assert utf8.get_rune('a', 1) == replacement // index == len
+	assert utf8.get_rune('a', 999) == replacement
+	assert utf8.get_rune('a★', 4) == replacement // index == len
+	// a NUL that is in the string is still a NUL
+	assert utf8.get_rune('\x00', 0) == rune(0)
+	assert utf8.get_rune('a\x00b', 1) == rune(0)
+	assert utf8.get_rune('\x00', 1) == replacement
+	// the predicates that take an index see no punctuation outside of the string
+	assert utf8.is_punct('', 0) == false
+	assert utf8.is_punct('.', 1) == false
+	assert utf8.is_global_punct('', 0) == false
+	assert utf8.is_global_punct('.', 1) == false
+}
+
+fn check_decode_rune_at(s string, index int, expected_rune rune, expected_size int) {
+	r, size := utf8.decode_rune_at(s, index)
+	assert r == expected_rune, 'rune at index ${index} of ${s.bytes().hex()}'
+	assert size == expected_size, 'size at index ${index} of ${s.bytes().hex()}'
+	assert utf8.get_rune(s, index) == r
+}
+
+fn test_decode_rune_at() {
+	replacement := rune(0xfffd)
+	// valid sequences return the rune and its length in bytes
+	c := 'a©★🚀'
+	check_decode_rune_at(c, 0, `a`, 1)
+	check_decode_rune_at(c, 1, `©`, 2)
+	check_decode_rune_at(c, 3, `★`, 3)
+	check_decode_rune_at(c, 6, `🚀`, 4)
+	check_decode_rune_at('\x00', 0, rune(0), 1)
+	// outside of the string: the replacement rune with a size of 0
+	check_decode_rune_at('', 0, replacement, 0)
+	check_decode_rune_at('', -1, replacement, 0)
+	check_decode_rune_at('a', -1, replacement, 0)
+	check_decode_rune_at('a', 1, replacement, 0)
+	check_decode_rune_at('a', 999, replacement, 0)
+	check_decode_rune_at(c, c.len, replacement, 0)
+	check_decode_rune_at('\x00', 1, replacement, 0)
+	// invalid sequences: the replacement rune with a size of 1
+	check_decode_rune_at(c, 2, replacement, 1) // second byte of ©
+	check_decode_rune_at(c, 4, replacement, 1) // second byte of ★
+	check_decode_rune_at(c, 9, replacement, 1) // last byte of 🚀
+	check_decode_rune_at([u8(0xff)].bytestr(), 0, replacement, 1)
+	check_decode_rune_at([u8(0xf5), `a`].bytestr(), 0, replacement, 1)
+	check_decode_rune_at([u8(0xe2), 0x98].bytestr(), 0, replacement, 1) // truncated ★
+	check_decode_rune_at([u8(0xc1), 0xa1].bytestr(), 0, replacement, 1) // overlong
+	check_decode_rune_at([u8(0xed), 0xa0, 0x80].bytestr(), 0, replacement, 1) // surrogate
+	// a replacement rune that is really in the string has its own size of 3
+	check_decode_rune_at('�', 0, replacement, 3)
+	check_decode_rune_at('a�', 1, replacement, 3)
+}
+
+fn test_decode_rune_at_walks_a_string() {
+	s := 'a©' + [u8(0xff)].bytestr() + '★\x00🚀'
+	mut runes := []rune{}
+	mut sizes := []int{}
+	mut i := 0
+	for {
+		r, size := utf8.decode_rune_at(s, i)
+		if size == 0 {
+			break
+		}
+		runes << r
+		sizes << size
+		i += size
+	}
+	assert i == s.len
+	assert runes == [`a`, `©`, rune(0xfffd), `★`, rune(0), `🚀`]
+	assert sizes == [1, 2, 1, 3, 1, 4]
+	assert runes.len == utf8.len(s)
+}
+
+fn test_invalid_utf8_indexing_advances_one_byte() {
+	replacement := rune(0xfffd).str()
+	invalid := [u8(0xf5), `a`].bytestr()
+	assert utf8.get_rune(invalid, 0) == rune(0xfffd)
+	assert utf8.get_rune(invalid, 1) == `a`
+	assert utf8.len(invalid) == 2
+	assert utf8.raw_index(invalid, 0) == replacement
+	assert utf8.raw_index(invalid, 1) == 'a'
+	assert utf8.reverse(invalid) == 'a' + replacement
+	assert utf8.to_upper(invalid) == [u8(0xf5), `A`].bytestr()
+	assert utf8.to_lower([u8(0xf5), `A`].bytestr()) == invalid
 }
 
 fn test_raw_indexing() {
@@ -56,6 +164,13 @@ fn test_raw_indexing() {
 	assert utf8.raw_index(a, 6) == 'n'
 	assert utf8.raw_index(a, 7) == 'g'
 	assert utf8.raw_index(a, 8) == '!'
+
+	// test differnt utf8 byte lengths
+	c := 'a©★🚀'
+	assert utf8.raw_index(c, 0) == 'a' // 1 byte
+	assert utf8.raw_index(c, 1) == '©' // 2 bytes
+	assert utf8.raw_index(c, 2) == '★' // 3 bytes
+	assert utf8.raw_index(c, 3) == '🚀' // 4 bytes
 }
 
 fn test_reversed() {
@@ -63,4 +178,100 @@ fn test_reversed() {
 	b := '你好世界hello world'
 	assert utf8.reverse(a) == '!gnaL V是我'
 	assert utf8.reverse(b) == 'dlrow olleh界世好你'
+}
+
+fn test_reverse_of_one_rune_matches_longer_strings() {
+	replacement := rune(0xfffd).str()
+	assert utf8.reverse('') == ''
+	// Every one byte string is one rune: ASCII (NUL included) is kept, while a lone
+	// continuation byte, an invalid lead byte and a truncated lead byte are replaced.
+	for b in 0 .. 0x100 {
+		one := [u8(b)].bytestr()
+		expected := if b < 0x80 { one } else { replacement }
+		assert utf8.len(one) == 1
+		assert utf8.reverse(one) == expected, 'byte 0x${b:02x}'
+		assert utf8.reverse('x' + one + 'y') == 'y' + expected + 'x', 'byte 0x${b:02x}'
+	}
+	// One valid rune of 2, 3 and 4 bytes is returned unchanged.
+	for valid in ['©', '★', '🚀'] {
+		assert utf8.len(valid) == 1
+		assert utf8.reverse(valid) == valid
+		assert utf8.reverse('x' + valid + 'y') == 'y' + valid + 'x'
+	}
+	// Longer invalid sequences give one replacement rune per byte.
+	invalid_sequences := [
+		[u8(0xe4), 0xbd], // truncated 3 byte sequence
+		[u8(0xf0), 0x9f, 0x9a], // truncated 4 byte sequence
+		[u8(0xc0), 0x80], // overlong 2 byte encoding
+		[u8(0xe0), 0x80, 0x80], // overlong 3 byte encoding
+		[u8(0xf0), 0x80, 0x80, 0x80], // overlong 4 byte encoding
+		[u8(0xed), 0xa0, 0x80], // surrogate U+D800
+		[u8(0xf4), 0x90, 0x80, 0x80], // above U+10FFFF
+	]
+	for bytes in invalid_sequences {
+		invalid := bytes.bytestr()
+		expected := replacement.repeat(bytes.len)
+		assert utf8.len(invalid) == bytes.len
+		assert utf8.reverse(invalid) == expected, bytes.hex()
+		assert utf8.reverse('x' + invalid + 'y') == 'y' + expected + 'x', bytes.hex()
+	}
+}
+
+fn test_is_control() {
+	for ra in `a` .. `z` {
+		assert utf8.is_control(ra) == false
+	}
+
+	for ra in `A` .. `Z` {
+		assert utf8.is_control(ra) == false
+	}
+
+	assert utf8.is_control('\x01'.runes()[0]) == true
+	assert utf8.is_control('\u0100'.runes()[0]) == false
+}
+
+fn test_is_letter() {
+	for ra in `a` .. `z` {
+		assert utf8.is_letter(ra) == true
+	}
+
+	for ra in `A` .. `Z` {
+		assert utf8.is_letter(ra) == true
+	}
+
+	assert utf8.is_letter(`ɀ`) == true
+	assert utf8.is_letter(`ȶ`) == true
+	assert utf8.is_letter(`ȹ`) == true
+}
+
+fn test_is_space() {
+	for ra in `a` .. `z` {
+		assert utf8.is_space(ra) == false
+	}
+
+	for ra in `A` .. `Z` {
+		assert utf8.is_space(ra) == false
+	}
+
+	assert utf8.is_space(`\u202f`) == true
+	assert utf8.is_space(`\u2009`) == true
+	assert utf8.is_space(`\u00A0`) == true
+}
+
+fn test_is_number() {
+	for ra in `a` .. `z` {
+		assert utf8.is_number(ra) == false
+	}
+
+	for ra in `A` .. `Z` {
+		assert utf8.is_number(ra) == false
+	}
+
+	for ra in `0` .. `1` {
+		assert utf8.is_number(ra) == true
+	}
+
+	assert utf8.is_number(`\u2164`) == true
+	assert utf8.is_number(`\u2188`) == true
+	assert utf8.is_number(`\u3029`) == true
 }

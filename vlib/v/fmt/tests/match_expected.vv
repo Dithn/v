@@ -36,3 +36,29 @@ fn really_long_branch_exprs() {
 		}
 	}
 }
+
+fn match_branch_extra_comma() {
+	match x {
+		Foo, Bar {}
+		int, string {}
+	}
+	match n {
+		0...5 {}
+		2, 3 {}
+		else {}
+	}
+}
+
+fn match_index_range_expr(var string) string {
+	return match true {
+		var.len < 3 { 'i#' + var }
+		var[1..2].contains('#') { var }
+		else { 'i#' + var }
+	}
+}
+
+fn match_condition_or_block() {
+	match read_bool() {
+		true {}
+	} or {}
+}

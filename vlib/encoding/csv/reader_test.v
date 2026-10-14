@@ -28,6 +28,34 @@ fn test_encoding_csv_reader() {
 	assert row_count == 3
 }
 
+fn test_encoding_csv_reader_with_custom_delimiter() {
+	data := 'name|email|phone|other\njoe|joe@blow.com|0400000000|test\nsam|sam@likesham.com|0433000000|"test quoted field"\n#chris|chris@nomail.com|94444444|"commented row"\n'
+	mut csv_reader := csv.new_reader(data, delimiter: `|`)
+	mut row_count := 0
+	for {
+		row := csv_reader.read() or { break }
+		row_count++
+		if row_count == 1 {
+			assert row[0] == 'name'
+			assert row[1] == 'email'
+			assert row[2] == 'phone'
+			assert row[3] == 'other'
+		} else if row_count == 2 {
+			assert row[0] == 'joe'
+			assert row[1] == 'joe@blow.com'
+			assert row[2] == '0400000000'
+			assert row[3] == 'test'
+		} else if row_count == 3 {
+			assert row[0] == 'sam'
+			assert row[1] == 'sam@likesham.com'
+			assert row[2] == '0433000000'
+			// quoted field
+			assert row[3] == 'test quoted field'
+		}
+	}
+	assert row_count == 3
+}
+
 fn test_line_break_lf() {
 	lf_data := 'name,email\njoe,joe@blow.com\n'
 	mut csv_reader := csv.new_reader(lf_data)
@@ -250,4 +278,30 @@ fn test_field_double_quotes() {
 		}
 	}
 	assert row_count == 3
+}
+
+struct Test {
+mut:
+	id     int
+	bonus  string
+	amount int
+	yes    bool
+}
+
+fn test_decode_to_struct() {
+	text := 'id,bonus,amount,yes\r\n1,bomb,1,true\r\n2,rocket,1,false,\r\n3,lightning,2,2\r\n'
+	arr := csv.decode[Test](text)
+	assert arr[0].id == 1
+	assert arr[0].bonus == 'bomb'
+	assert arr[0].amount == 1
+	assert arr[0].yes == true
+	assert arr[1].id == 2
+	assert arr[1].bonus == 'rocket'
+	assert arr[1].amount == 1
+	assert arr[1].yes == false
+	assert arr[2].id == 3
+	assert arr[2].bonus == 'lightning'
+	assert arr[2].amount == 2
+	assert arr[2].yes == true
+	assert arr.len == 3
 }

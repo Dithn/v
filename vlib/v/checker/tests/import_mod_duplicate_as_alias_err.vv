@@ -1,0 +1,8 @@
+module strings
+
+import strings as vstrings
+
+const used = true
+
+println(used)
+println(vstrings.used)

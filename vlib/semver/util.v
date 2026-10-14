@@ -1,20 +1,19 @@
 module semver
 
 // * Private functions.
-[inline]
+@[inline]
 fn is_version_valid(input string) bool {
 	raw_ver := parse(input)
 	return raw_ver.is_valid()
 }
 
-[inline]
-fn coerce_version(input string) ?Version {
+@[inline]
+fn coerce_version(input string) !Version {
 	raw_ver := parse(input)
-	ver := raw_ver.coerce() or { return error('Invalid version for input "$input"') }
-	return ver
+	return raw_ver.coerce() or { return error('Invalid version for input "${input}"') }
 }
 
-[inline]
+@[inline]
 fn increment_version(ver Version, typ Increment) Version {
 	mut major := ver.major
 	mut minor := ver.minor
@@ -33,6 +32,7 @@ fn increment_version(ver Version, typ Increment) Version {
 			patch++
 		}
 	}
+
 	return Version{major, minor, patch, ver.prerelease, ver.metadata}
 }
 
@@ -45,7 +45,15 @@ fn is_valid_string(input string) bool {
 	return true
 }
 
+// is_valid_number reports whether input is a run of decimal digits.
+//
+// An empty string is not a number. Returning true for it let `coerce_version(''`
+// succeed as `0.0.0`, which turned an empty range into the exact pin `=0.0.0`
+// instead of the `*` the grammar calls for.
 fn is_valid_number(input string) bool {
+	if input.len == 0 {
+		return false
+	}
 	for c in input {
 		if !c.is_digit() {
 			return false

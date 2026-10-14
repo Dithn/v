@@ -26,7 +26,7 @@ fn (l Lander) deorbit() {
 }
 
 fn (l Lander) open_parachutes(n int) {
-	println('opening $n parachutes')
+	println('opening ${n} parachutes')
 }
 
 fn wait() {
@@ -52,6 +52,7 @@ fn (l Lander) land(w World) {
 			l.open_parachutes(1)
 		}
 	}
+
 	println('landed')
 }
 

@@ -1,0 +1,9 @@
+type IntPointerAlias = &int
+
+fn main() {
+	i := 1
+	s := 'hi'
+	p := IntPointerAlias(&i)
+	println(p)
+	eprintln(&s)
+}

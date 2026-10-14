@@ -1,6 +1,6 @@
 // This module defines the Context type, which carries deadlines, cancellation signals,
 // and other request-scoped values across API boundaries and between processes.
-// Based off:   https://github.com/golang/go/tree/master/src/context
+// Based on:   https://github.com/golang/go/tree/master/src/context
 // Last commit: https://github.com/golang/go/commit/52bf14e0e8bdcd73f1ddfb0c4a1d0200097d3ba2
 module context
 
@@ -9,8 +9,8 @@ import time
 // A ValueContext carries a key-value pair. It implements Value for that key and
 // delegates all other calls to the embedded Context.
 pub struct ValueContext {
-	key   string
-	value voidptr
+	key   Key
+	value Any
 mut:
 	context Context
 }
@@ -25,33 +25,41 @@ mut:
 // string or any other built-in type to avoid collisions between
 // packages using context. Users of with_value should define their own
 // types for keys
-pub fn with_value(parent Context, key string, value voidptr) Context {
+pub fn with_value(parent Context, key Key, value Any) Context {
 	return &ValueContext{
 		context: parent
-		key: key
-		value: value
+		key:     key
+		value:   value
 	}
 }
 
-pub fn (ctx ValueContext) deadline() ?time.Time {
+// deadline returns the deadline from the parent context.
+pub fn (ctx &ValueContext) deadline() ?time.Time {
 	return ctx.context.deadline()
 }
 
-pub fn (ctx ValueContext) done() chan int {
+// done returns the done channel from the parent context.
+pub fn (mut ctx ValueContext) done() chan int {
 	return ctx.context.done()
 }
 
-pub fn (ctx ValueContext) err() IError {
+// err returns the error from the parent context.
+pub fn (mut ctx ValueContext) err() IError {
 	return ctx.context.err()
 }
 
-pub fn (ctx ValueContext) value(key string) ?voidptr {
+// value returns the value associated with this context for the given key.
+// If the key matches the one stored in this ValueContext, its value is returned.
+// Otherwise, the lookup is delegated to the parent context.
+pub fn (ctx &ValueContext) value(key Key) ?Any {
 	if ctx.key == key {
 		return ctx.value
 	}
 	return ctx.context.value(key)
 }
 
-pub fn (ctx ValueContext) str() string {
+// str returns a string representation of the ValueContext,
+// showing the parent context name suffixed with '.with_value'.
+pub fn (ctx &ValueContext) str() string {
 	return context_name(ctx.context) + '.with_value'
 }

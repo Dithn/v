@@ -12,28 +12,31 @@ module ttf
 *
 * TODO:
 **********************************************************************/
+// Text_block represents a visual block of TTF text.
 pub struct Text_block {
-	x         int  // x postion of the left high corner
-	y         int  // y postion of the left high corner
-	w         int  // width of the text block
-	h         int  // heigth of the text block
+pub:
+	x         int // x position of the left high corner
+	y         int // y position of the left high corner
+	w         int // width of the text block
+	h         int // height of the text block
 	cut_lines bool = true // force to cut the line if the length is over the text block width
 }
 
-fn (mut dev BitMap) get_justify_space_cw(txt string, w int, block_w int, space_cw int) f32 {
+// get_justify_space_cw returns the space needed to justify `txt`.
+pub fn (mut dev BitMap) get_justify_space_cw(txt string, w int, block_w int, space_cw int) f32 {
 	num_spaces := txt.count(' ')
 	if num_spaces < 1 {
 		return 0
 	}
 	delta := block_w - w
-	// println("num spc: $num_spaces")
-	// println("delta: ${txt} w:$w bw:$block_w space_cw:$space_cw")
+	// println("num spc: ${num_spaces}")
+	// println("delta: ${txt} w:${w} bw:${block_w} space_cw:${space_cw}")
 	res := f32(delta) / f32(num_spaces) / f32(space_cw)
-	// println("res: $res")
+	// println("res: ${res}")
 	return res
 }
 
-// write out a text
+// draw_text_block renders out `text` in the `Text_block` `block`.
 pub fn (mut bmp BitMap) draw_text_block(text string, block Text_block) {
 	mut x := block.x
 	mut y := block.y
@@ -78,7 +81,7 @@ pub fn (mut bmp BitMap) draw_text_block(text string, block Text_block) {
 			for c > 0 {
 				tmp_str := txt1[0..c].join(' ')
 				// println("tmp_str: ${tmp_str}")
-				if tmp_str.len < 1 {
+				if tmp_str == '' {
 					break
 				}
 
@@ -99,11 +102,11 @@ pub fn (mut bmp BitMap) draw_text_block(text string, block Text_block) {
 					bmp.draw_text(tmp_str)
 					//---- DEBUG ----
 					// txt_w , txt_h := bmp.draw_text(tmp_str)
-					// println("printing [${x},${y}] => '${tmp_str}' space_cw: $bmp.space_cw")
+					// println("printing [${x},${y}] => '${tmp_str}' space_cw: ${bmp.space_cw}")
 					// bmp.box(x + left_offset,y + y_base - int((bmp.tf.y_min)*bmp.scale), x + txt_w + left_offset, y + y_base - int((bmp.tf.y_max) * bmp.scale), u32(0x00ff_0000) )
 					//---------------
 					y += y_base
-					txt1 = txt1[c..]
+					txt1 = unsafe { txt1[c..] }
 					c = txt1.len
 					//---- DEBUG ----
 					// txt2 := txt1.join(' ')

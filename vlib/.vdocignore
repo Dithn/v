@@ -1,16 +1,11 @@
-builtin/bare
 builtin/js
+builtin/wasm
 builtin/linux_bare
-dl/example
-oldgg/
+builtin/wasm_bare
 os/bare
-os2/
-net/websocket/examples
-uiold/
-v/tests/
-v/checker/tests/
-v/gen/js/tests/
-v/gen/x64/tests/
-v/gen/tests/
+# Experimental and not part of the 0.5.1 release.
+goroutines
+net/grpc
+v/slow_tests/
 v/preludes_js/
-vweb/tests
+v/preludes

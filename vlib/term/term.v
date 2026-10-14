@@ -1,33 +1,51 @@
+@[has_globals]
 module term
 
 import os
 import strings.textscanner
 
-const (
-	default_columns_size = 80
-	default_rows_size    = 25
-)
+const default_columns_size = 80
+const default_rows_size = 25
 
-// Coord - used by term.get_cursor_position and term.set_cursor_position
+// Coord - used by term.get_cursor_position and term.set_cursor_position.
 pub struct Coord {
 pub mut:
 	x int
 	y int
 }
 
-// can_show_color_on_stdout returns true if colors are allowed in stdout;
-// returns false otherwise.
+__global can_show_color_on_stdout_cache = 0
+__global can_show_color_on_stderr_cache = 0
+
+// can_show_color_on_stdout returns true, if colors are allowed in stdout.
+// It returns false otherwise.
 pub fn can_show_color_on_stdout() bool {
-	return supports_escape_sequences(1)
+	match can_show_color_on_stdout_cache {
+		1 { return true }
+		-1 { return false }
+		else {}
+	}
+
+	status := supports_escape_sequences(1)
+	can_show_color_on_stdout_cache = if status { 1 } else { -1 }
+	return status
 }
 
-// can_show_color_on_stderr returns true if colors are allowed in stderr;
-// returns false otherwise.
+// can_show_color_on_stderr returns true, if colors are allowed in stderr.
+// It returns false otherwise.
 pub fn can_show_color_on_stderr() bool {
-	return supports_escape_sequences(2)
+	match can_show_color_on_stderr_cache {
+		1 { return true }
+		-1 { return false }
+		else {}
+	}
+
+	status := supports_escape_sequences(2)
+	can_show_color_on_stderr_cache = if status { 1 } else { -1 }
+	return status
 }
 
-// failed returns a bold white on red version of the string `s`
+// failed returns a bold white on red version of the string `s`.
 // If colors are not allowed, returns the string `s`
 pub fn failed(s string) string {
 	if can_show_color_on_stdout() {
@@ -40,7 +58,7 @@ pub fn failed(s string) string {
 // If colors are not allowed, returns a given string.
 pub fn ok_message(s string) string {
 	if can_show_color_on_stdout() {
-		return green(' $s ')
+		return green('${s}')
 	}
 	return s
 }
@@ -48,20 +66,19 @@ pub fn ok_message(s string) string {
 // fail_message returns a colored string with red color.
 // If colors are not allowed, returns a given string.
 pub fn fail_message(s string) string {
-	return failed(' $s ')
+	return failed('${s}')
 }
 
 // warn_message returns a colored string with yellow color.
 // If colors are not allowed, returns a given string.
 pub fn warn_message(s string) string {
 	if can_show_color_on_stdout() {
-		return bright_yellow(' $s ')
+		return bright_yellow('${s}')
 	}
 	return s
 }
 
-// colorize returns a colored string by running the specified `cfn` over
-// the message `s`, only if colored output is supported by the terminal.
+// colorize returns a colored string by running the specified `cfn` over the message `s`, but only if colored stdout is supported by the terminal.
 // Example: term.colorize(term.yellow, 'the message')
 pub fn colorize(cfn fn (string) string, s string) string {
 	if can_show_color_on_stdout() {
@@ -70,12 +87,21 @@ pub fn colorize(cfn fn (string) string, s string) string {
 	return s
 }
 
-// strip_ansi removes any ANSI sequences in the `text`
+// ecolorize returns a colored string by running the specified `cfn` over the message `s`, but only if colored stderr is supported by the terminal.
+// Example: term.ecolorize(term.bright_red, 'the message')
+pub fn ecolorize(cfn fn (string) string, s string) string {
+	if can_show_color_on_stderr() {
+		return cfn(s)
+	}
+	return s
+}
+
+// strip_ansi removes any ANSI sequences in the `text`.
 pub fn strip_ansi(text string) string {
 	// This is a port of https://github.com/kilobyte/colorized-logs/blob/master/ansi2txt.c
 	// \e, [, 1, m, a, b, c, \e, [, 2, 2, m => abc
 	mut input := textscanner.new(text)
-	mut output := []byte{cap: text.len}
+	mut output := []u8{cap: text.len}
 	mut ch := 0
 	for ch != -1 {
 		ch = input.next()
@@ -107,15 +133,14 @@ pub fn strip_ansi(text string) string {
 				ch = input.next()
 			}
 		} else if ch != -1 {
-			output << byte(ch)
+			output << u8(ch)
 		}
 	}
 	return output.bytestr()
 }
 
-// h_divider returns a horizontal divider line with a dynamic width,
-// that depends on the current terminal settings.
-// If an empty string is passed in, print enough spaces to make a new line
+// h_divider returns a horizontal divider line with a dynamic width, that depends on the current terminal settings.
+// If an empty string is passed in, print enough spaces to make a new line.
 pub fn h_divider(divider string) string {
 	cols, _ := get_terminal_size()
 	mut result := ''
@@ -132,13 +157,13 @@ pub fn h_divider(divider string) string {
 // ==== TITLE =========================
 pub fn header_left(text string, divider string) string {
 	plain_text := strip_ansi(text)
-	xcols, _ := get_terminal_size()
+	xcols, _ := get_terminal_size() // can get 0 in lldb/gdb
 	cols := imax(1, xcols)
 	relement := if divider.len > 0 { divider } else { ' ' }
 	hstart := relement.repeat(4)[0..4]
-	remaining_cols := (cols - (hstart.len + 1 + plain_text.len + 1))
+	remaining_cols := imax(0, (cols - (hstart.len + 1 + plain_text.len + 1)))
 	hend := relement.repeat((remaining_cols + 1) / relement.len)[0..remaining_cols]
-	return '$hstart $text $hend'
+	return '${hstart} ${text} ${hend}'
 }
 
 // header returns a horizontal divider line with a centered text in the middle.
@@ -155,8 +180,8 @@ pub fn header(text string, divider string) string {
 	} else {
 		cols - 3 - 2 * divider.len
 	})
-	tlimit_alligned := if (tlimit % 2) != (cols % 2) { tlimit + 1 } else { tlimit }
-	tstart := imax(0, (cols - tlimit_alligned) / 2)
+	tlimit_aligned := if (tlimit % 2) != (cols % 2) { tlimit + 1 } else { tlimit }
+	tstart := imax(0, (cols - tlimit_aligned) / 2)
 	mut ln := ''
 	if divider.len > 0 {
 		ln = divider.repeat(1 + cols / divider.len)[0..cols]
@@ -173,19 +198,31 @@ fn imax(x int, y int) int {
 	return if x > y { x } else { y }
 }
 
+@[manualfree]
 fn supports_escape_sequences(fd int) bool {
 	vcolors_override := os.getenv('VCOLORS')
+	defer {
+		unsafe { vcolors_override.free() }
+	}
 	if vcolors_override == 'always' {
 		return true
 	}
 	if vcolors_override == 'never' {
 		return false
 	}
-	if os.getenv('TERM') == 'dumb' {
+	env_term := os.getenv('TERM')
+	defer {
+		unsafe { env_term.free() }
+	}
+	if env_term == 'dumb' {
 		return false
 	}
 	$if windows {
-		if os.getenv('ConEmuANSI') == 'ON' {
+		env_conemu := os.getenv('ConEmuANSI')
+		defer {
+			unsafe { env_conemu.free() }
+		}
+		if env_conemu == 'ON' {
 			return true
 		}
 		// 4 is enable_virtual_terminal_processing

@@ -6,91 +6,84 @@ module main
 import term.ui
 
 // The color palette, taken from Google's Material design
-const (
-	colors = [
-		[
-			ui.Color{239, 154, 154},
-			ui.Color{244, 143, 177},
-			ui.Color{206, 147, 216},
-			ui.Color{179, 157, 219},
-			ui.Color{159, 168, 218},
-			ui.Color{144, 202, 249},
-			ui.Color{129, 212, 250},
-			ui.Color{128, 222, 234},
-			ui.Color{128, 203, 196},
-			ui.Color{165, 214, 167},
-			ui.Color{197, 225, 165},
-			ui.Color{230, 238, 156},
-			ui.Color{255, 245, 157},
-			ui.Color{255, 224, 130},
-			ui.Color{255, 204, 128},
-			ui.Color{255, 171, 145},
-			ui.Color{188, 170, 164},
-			ui.Color{238, 238, 238},
-			ui.Color{176, 190, 197},
-		],
-		[
-			ui.Color{244, 67, 54},
-			ui.Color{233, 30, 99},
-			ui.Color{156, 39, 176},
-			ui.Color{103, 58, 183},
-			ui.Color{63, 81, 181},
-			ui.Color{33, 150, 243},
-			ui.Color{3, 169, 244},
-			ui.Color{0, 188, 212},
-			ui.Color{0, 150, 136},
-			ui.Color{76, 175, 80},
-			ui.Color{139, 195, 74},
-			ui.Color{205, 220, 57},
-			ui.Color{255, 235, 59},
-			ui.Color{255, 193, 7},
-			ui.Color{255, 152, 0},
-			ui.Color{255, 87, 34},
-			ui.Color{121, 85, 72},
-			ui.Color{120, 120, 120},
-			ui.Color{96, 125, 139},
-		],
-		[
-			ui.Color{198, 40, 40},
-			ui.Color{173, 20, 87},
-			ui.Color{106, 27, 154},
-			ui.Color{69, 39, 160},
-			ui.Color{40, 53, 147},
-			ui.Color{21, 101, 192},
-			ui.Color{2, 119, 189},
-			ui.Color{0, 131, 143},
-			ui.Color{0, 105, 92},
-			ui.Color{46, 125, 50},
-			ui.Color{85, 139, 47},
-			ui.Color{158, 157, 36},
-			ui.Color{249, 168, 37},
-			ui.Color{255, 143, 0},
-			ui.Color{239, 108, 0},
-			ui.Color{216, 67, 21},
-			ui.Color{78, 52, 46},
-			ui.Color{33, 33, 33},
-			ui.Color{55, 71, 79},
-		],
-	]
-)
+const colors = [
+	[
+		ui.Color{239, 154, 154},
+		ui.Color{244, 143, 177},
+		ui.Color{206, 147, 216},
+		ui.Color{179, 157, 219},
+		ui.Color{159, 168, 218},
+		ui.Color{144, 202, 249},
+		ui.Color{129, 212, 250},
+		ui.Color{128, 222, 234},
+		ui.Color{128, 203, 196},
+		ui.Color{165, 214, 167},
+		ui.Color{197, 225, 165},
+		ui.Color{230, 238, 156},
+		ui.Color{255, 245, 157},
+		ui.Color{255, 224, 130},
+		ui.Color{255, 204, 128},
+		ui.Color{255, 171, 145},
+		ui.Color{188, 170, 164},
+		ui.Color{238, 238, 238},
+		ui.Color{176, 190, 197},
+	],
+	[
+		ui.Color{244, 67, 54},
+		ui.Color{233, 30, 99},
+		ui.Color{156, 39, 176},
+		ui.Color{103, 58, 183},
+		ui.Color{63, 81, 181},
+		ui.Color{33, 150, 243},
+		ui.Color{3, 169, 244},
+		ui.Color{0, 188, 212},
+		ui.Color{0, 150, 136},
+		ui.Color{76, 175, 80},
+		ui.Color{139, 195, 74},
+		ui.Color{205, 220, 57},
+		ui.Color{255, 235, 59},
+		ui.Color{255, 193, 7},
+		ui.Color{255, 152, 0},
+		ui.Color{255, 87, 34},
+		ui.Color{121, 85, 72},
+		ui.Color{120, 120, 120},
+		ui.Color{96, 125, 139},
+	],
+	[
+		ui.Color{198, 40, 40},
+		ui.Color{173, 20, 87},
+		ui.Color{106, 27, 154},
+		ui.Color{69, 39, 160},
+		ui.Color{40, 53, 147},
+		ui.Color{21, 101, 192},
+		ui.Color{2, 119, 189},
+		ui.Color{0, 131, 143},
+		ui.Color{0, 105, 92},
+		ui.Color{46, 125, 50},
+		ui.Color{85, 139, 47},
+		ui.Color{158, 157, 36},
+		ui.Color{249, 168, 37},
+		ui.Color{255, 143, 0},
+		ui.Color{239, 108, 0},
+		ui.Color{216, 67, 21},
+		ui.Color{78, 52, 46},
+		ui.Color{33, 33, 33},
+		ui.Color{55, 71, 79},
+	],
+]
 
-const (
-	frame_rate       = 30 // fps
-	msg_display_time = 5 * frame_rate
-	w                = 200
-	h                = 100
-	space            = ' '
-	spaces           = '  '
-	select_color     = 'Select color: '
-	select_size      = 'Size: ＋  －'
-	help_1           = '╭────────╮'
-	help_2           = '│  HELP  │'
-	help_3           = '╰────────╯'
-)
+const frame_rate = 30 // fps
+
+const w = 200
+const h = 100
+const space = ' '
+const spaces = '  '
+const select_color = 'Select color: '
+const select_size = 'Size: ＋  －'
 
 struct App {
 mut:
-	ui                  &ui.Context = 0
+	ui                  &ui.Context = unsafe { nil }
 	header_text         []string
 	mouse_pos           Point
 	msg                 string
@@ -101,8 +94,8 @@ mut:
 	secondary_color_idx int          = 28
 	bg_color            ui.Color     = ui.Color{0, 0, 0}
 	drawing             [][]ui.Color = [][]ui.Color{len: h, init: []ui.Color{len: w}}
-	size                int  = 1
-	should_redraw       bool = true
+	size                int          = 1
+	should_redraw       bool         = true
 	is_dragging         bool
 }
 
@@ -112,24 +105,31 @@ mut:
 	y int
 }
 
+type EventFn = fn (&ui.Event, voidptr)
+
+type FrameFn = fn (voidptr)
+
 fn main() {
 	mut app := &App{}
 	app.ui = ui.init(
-		user_data: app
-		frame_fn: frame
-		event_fn: event
-		frame_rate: frame_rate
-		hide_cursor: true
+		user_data:    app
+		// The tui callback slots are `voidptr`; `frame`/`event` instead take the typed app
+		// pointer that `user_data` hands back. `&T` and `voidptr` share a representation, so
+		// reinterpreting the fn pointer across that parameter is ABI-safe; the cast only
+		// satisfies the static fn-type check.
+		frame_fn:     unsafe { FrameFn(frame) }
+		event_fn:     unsafe { EventFn(event) }
+		frame_rate:   frame_rate
+		hide_cursor:  true
 		window_title: 'V terminal pixelart drawing app'
 	)
 	app.mouse_pos.x = 40
 	app.mouse_pos.y = 15
 	app.ui.clear()
-	app.ui.run() ?
+	app.ui.run()!
 }
 
-fn frame(x voidptr) {
-	mut app := &App(x)
+fn frame(mut app App) {
 	mut redraw := app.should_redraw
 	if app.msg != '' && app.ui.frame_count >= app.msg_hide_tick {
 		app.msg = ''
@@ -141,8 +141,7 @@ fn frame(x voidptr) {
 	}
 }
 
-fn event(event &ui.Event, x voidptr) {
-	mut app := &App(x)
+fn event(event &ui.Event, mut app App) {
 	match event.typ {
 		.mouse_down {
 			app.is_dragging = true
@@ -197,8 +196,8 @@ fn event(event &ui.Event, x voidptr) {
 					nevent := ui.Event{
 						...oevent
 						button: ui.MouseButton.left
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -207,8 +206,8 @@ fn event(event &ui.Event, x voidptr) {
 					nevent := ui.Event{
 						...oevent
 						button: ui.MouseButton.right
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -217,8 +216,8 @@ fn event(event &ui.Event, x voidptr) {
 					nevent := ui.Event{
 						...oevent
 						button: .left
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -227,8 +226,8 @@ fn event(event &ui.Event, x voidptr) {
 					nevent := ui.Event{
 						...oevent
 						button: .middle
-						x: app.mouse_pos.x
-						y: app.mouse_pos.y
+						x:      app.mouse_pos.x
+						y:      app.mouse_pos.y
 					}
 					app.paint(nevent)
 				}
@@ -292,6 +291,7 @@ fn event(event &ui.Event, x voidptr) {
 		}
 		else {}
 	}
+
 	app.should_redraw = true
 }
 
@@ -319,7 +319,7 @@ fn (mut app App) select_color(primary bool, idx int) {
 		app.secondary_color = color
 	}
 	c_str := if primary { 'primary' } else { 'secondary' }
-	app.show_msg('set $c_str color idx: $idx', 1)
+	app.show_msg('set ${c_str} color idx: ${idx}', 1)
 }
 
 fn (mut app App) set_pixel(x_ int, y_ int, c ui.Color) {
@@ -344,6 +344,7 @@ fn (mut app App) paint(event &ui.Event) {
 		.right { app.secondary_color }
 		else { app.bg_color }
 	}
+
 	for x in x_start .. x_start + app.size {
 		for y in y_start .. y_start + app.size {
 			app.set_pixel(x, y, color)
@@ -420,11 +421,12 @@ fn (mut app App) draw_header() {
 			g: 220
 			b: 220
 		)
-		app.ui.draw_text(0, 0, ' $app.msg ')
+		app.ui.draw_text(0, 0, ' ${app.msg} ')
 		app.ui.reset()
 	}
-	//'tick: $app.ui.frame_count | ' +
-	app.ui.draw_text(3, 2, 'terminal size: ($app.ui.window_width, $app.ui.window_height) | primary color: $app.primary_color.hex() | secondary color: $app.secondary_color.hex()')
+	//'tick: ${app.ui.frame_count} | ' +
+	app.ui.draw_text(3, 2,
+		'terminal size: (${app.ui.window_width}, ${app.ui.window_height}) | primary color: ${app.primary_color.hex()} | secondary color: ${app.secondary_color.hex()}')
 	app.ui.horizontal_separator(3)
 }
 
@@ -452,7 +454,7 @@ fn (mut app App) draw_footer() {
 	app.ui.reset_bg_color()
 	app.ui.draw_text(3, wh - 3, select_color)
 	app.ui.bold()
-	app.ui.draw_text(3, wh - 1, '$select_size $app.size')
+	app.ui.draw_text(3, wh - 1, '${select_size} ${app.size}')
 	app.ui.reset()
 
 	// TODO: help button
@@ -463,20 +465,20 @@ fn (mut app App) draw_footer() {
 	// }
 }
 
-[inline]
+@[inline]
 fn (mut app App) inc_size() {
 	if app.size < 30 {
 		app.size++
 	}
-	app.show_msg('inc. size: $app.size', 1)
+	app.show_msg('inc. size: ${app.size}', 1)
 }
 
-[inline]
+@[inline]
 fn (mut app App) dec_size() {
 	if app.size > 1 {
 		app.size--
 	}
-	app.show_msg('dec. size: $app.size', 1)
+	app.show_msg('dec. size: ${app.size}', 1)
 }
 
 fn (mut app App) footer_click(event &ui.Event) {

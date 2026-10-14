@@ -2,17 +2,18 @@ module builtin
 
 pub struct string {
 pub:
-	str &byte
+	str &u8
 	len int
 }
 
-pub fn strlen(s &byte) int {
+pub fn strlen(s &u8) int {
 	mut i := 0
-	for ; s[i] != 0; i++ {}
+	for ; s[i] != 0; i++ {
+	}
 	return i
 }
 
-pub fn tos(s &byte, len int) string {
+pub fn tos(s &u8, len int) string {
 	if s == 0 {
 		panic('tos(): nil string')
 	}
@@ -49,7 +50,7 @@ pub fn tos_clone(s byteptr) string {
 
 // Same as `tos`, but calculates the length. Called by `string(bytes)` casts.
 // Used only internally.
-pub fn tos2(s &byte) string {
+pub fn tos2(s &u8) string {
 	if s == 0 {
 		panic('tos2: nil string')
 	}
@@ -64,8 +65,8 @@ pub fn tos3(s &char) string {
 		panic('tos3: nil string')
 	}
 	return string{
-		str: &byte(s)
-		len: strlen(&byte(s))
+		str: &u8(s)
+		len: strlen(&u8(s))
 	}
 }
 
@@ -85,7 +86,7 @@ pub fn string_ne(s1 string, s2 string) bool {
 	return !string_eq(s1, s2)
 }
 
-pub fn i64_tos(buf &byte, len int, n0 i64, base int) string {
+pub fn i64_tos(buf &u8, len int, n0 i64, base int) string {
 	if base < 2 {
 		panic('base must be >= 2')
 	}
@@ -102,11 +103,13 @@ pub fn i64_tos(buf &byte, len int, n0 i64, base int) string {
 		n = -n
 	}
 
-	b[i--] = 0
+	b[i] = 0
+	i--
 
 	for {
 		c := (n % base) + 48
-		b[i--] = if c > 57 { c + 7 } else { c }
+		b[i] = if c > 57 { c + 7 } else { c }
+		i--
 		if i < 0 {
 			panic('buffer to small')
 		}
@@ -119,7 +122,8 @@ pub fn i64_tos(buf &byte, len int, n0 i64, base int) string {
 		if i < 0 {
 			panic('buffer to small')
 		}
-		b[i--] = 45
+		b[i] = 45
+		i--
 	}
 	offset := i + 1
 	b.str = b.str + offset
@@ -133,7 +137,7 @@ pub fn i64_str(n0 i64, base int) string {
 }
 
 pub fn ptr_str(ptr voidptr) string {
-	buf := [16]byte{}
+	buf := [16]u8{}
 	hex := i64_tos(buf, 15, i64(ptr), 16)
 	res := '0x' + hex
 	return res

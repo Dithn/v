@@ -1,0 +1,461 @@
+module main
+
+import os
+import net.http
+import v.vmod
+
+struct Module {
+mut:
+	name          string
+	url           string
+	version       string // selected tag or the requested exact VCS ref.
+	version_range string // requested semantic version range, when one was supplied.
+	// requested is the dependency string the module was parsed from, as it is
+	// written in the `v.mod` or on the command line, including any `@version`.
+	requested            string
+	requested_aliases    []string
+	tmp_path             string
+	install_path         string
+	install_path_fmted   string
+	installed_version    string
+	is_installed         bool
+	is_external          bool
+	is_resolution_update bool
+	is_resolved          bool
+	vcs                  ?VCS
+	manifest             vmod.Manifest
+}
+
+struct Parser {
+mut:
+	modules              map[string]Module
+	checked_settings_vcs bool
+	search_modules       []string
+	search_loaded        bool
+	errors               int
+	encountered_range    bool
+	shallow              bool
+	quiet                bool
+	temporary_namespace  string
+	probe                bool
+	last_error           string
+}
+
+enum ModuleKind {
+	registered
+	https
+	http
+	ssh
+	local
+}
+
+// parse_query resolves the complete dependency graph before returning install candidates.
+// It exits without installing modules if resolution fails.
+fn parse_query(query []string, mut selector VpmInstallServerSelector, mut scope LockScope) ([]Module, int) {
+	modules := resolve_module_query(query, mut selector, mut scope, true, map[string]string{}) or {
+		vpm_error(err.msg())
+		exit(1)
+	}
+	return modules, 0
+}
+
+// report_module_clone_error shows range failures without requiring verbose mode.
+fn report_module_clone_error(ident string, requested string, version string, message string) {
+	if is_version_range(version) {
+		vpm_error('failed to resolve `${requested}`: ${message}')
+	} else {
+		vpm_error('failed to install `${ident}`.', details: message)
+	}
+}
+
+fn (mut p Parser) lookup_registered_name_for_url(manifest_name string, ident string, mut selector VpmInstallServerSelector) ?string {
+	if manifest_name == '' || manifest_name.contains('.') {
+		return none
+	}
+	expected_url := normalize_repo_lookup_url(ident) or { return none }
+	if !p.search_loaded {
+		p.search_modules = get_all_modules_for_search_with_selector(mut selector) or {
+			vpm_log(@FILE_LINE, @FN, 'failed to load the VPM search index for `${ident}`: ${err}')
+			p.search_loaded = true
+			return none
+		}
+		p.search_loaded = true
+	}
+	target_name := normalize_mod_path(manifest_name)
+	for registered_name in p.search_modules {
+		if normalize_mod_path(registered_name.all_after_last('.')) != target_name {
+			continue
+		}
+		info := get_mod_vpm_info_with_selector(registered_name, mut selector) or {
+			vpm_log(@FILE_LINE, @FN, 'failed to retrieve metadata for `${registered_name}`: ${err}')
+			continue
+		}
+		registered_url := normalize_repo_lookup_url(info.url) or { continue }
+		if registered_url == expected_url {
+			return info.name
+		}
+	}
+	return none
+}
+
+fn (mut p Parser) parse_module(m string, mut selector VpmInstallServerSelector, mut scope LockScope) {
+	kind := match true {
+		m.starts_with('https://') { ModuleKind.https }
+		m.starts_with('git@') { ModuleKind.ssh }
+		m.starts_with('http://') { ModuleKind.http }
+		is_local_repository(m) { ModuleKind.local }
+		else { ModuleKind.registered }
+	}
+
+	ident, version := if kind == .ssh {
+		if m.count('@') > 1 {
+			m.all_before_last('@'), m.all_after_last('@')
+		} else {
+			m, ''
+		}
+	} else {
+		m.rsplit_once('@') or { m, '' }
+	}
+	p.encountered_range = p.encountered_range || is_version_range(version)
+	key := match kind {
+		.registered { m }
+		.ssh { ident.replace(':', '/') + at_version(version) }
+		else { ident.all_after('//').trim_string_right('.git') + at_version(version) }
+	}
+
+	if key in p.modules {
+		return
+	}
+	if !p.quiet {
+		println('Scanning `${m}`...')
+	}
+	mut mod := if kind != ModuleKind.registered {
+		// External module. The identifier is an URL.
+		if kind == .http {
+			vpm_warn('installing `${ident}` via http.',
+				details: 'Support for `http` is deprecated, use `https` to ensure future compatibility.'
+			)
+		}
+		publisher, name := get_ident_from_url(if kind == .ssh {
+			'https://' + ident['git@'.len..].replace(':', '/')
+		} else {
+			ident
+		}) or {
+			p.module_error(err.msg())
+			p.errors++
+			return
+		}
+		// Verify VCS. Only needed once for external modules.
+		if !p.checked_settings_vcs {
+			p.checked_settings_vcs = true
+			settings.vcs.is_executable() or {
+				p.module_error(err.msg())
+				exit(1)
+			}
+		}
+		tmp_path := get_tmp_path(settings.tmp_path, os.join_path(p.temporary_namespace, publisher, name, version_tmp_name(version))) or {
+			p.module_error('failed to get temporary directory for `${ident}`.', details: err.msg())
+			p.errors++
+			return
+		}
+		resolved_version := clone_module_source(settings.vcs, m, ident, version, tmp_path, mut scope) or {
+			if p.probe {
+				p.last_error = 'failed to install `${m}`: ${err.msg()}'
+			} else {
+				report_module_clone_error(ident, m, version, err.msg())
+			}
+			rmdir_all(tmp_path) or {}
+			p.errors++
+			return
+		}
+		manifest := vmod.from_file(os.join_path(tmp_path, 'v.mod')) or {
+			p.module_error('failed to find `v.mod` for `${ident}${at_version(version)}`.',
+				details: err.msg()
+			)
+			rmdir_all(tmp_path) or {}
+			p.errors++
+			return
+		}
+		// Reuse the registered VPM name when a direct VCS URL points to the same repository.
+		registered_name := if kind in [.https, .ssh] {
+			p.lookup_registered_name_for_url(manifest.name, ident, mut selector) or { '' }
+		} else {
+			''
+		}
+		final_name := if registered_name != '' { registered_name } else { manifest.name }
+		mod_path := if registered_name != '' {
+			normalize_mod_path(final_name.replace('.', os.path_separator))
+		} else {
+			direct_install_mod_path(if kind == .http { publisher } else { '' }, manifest.name)
+		}
+		Module{
+			name:          final_name
+			url:           ident
+			version:       resolved_version
+			version_range: if is_version_range(version) { version } else { '' }
+			install_path:  os.abs_path(os.join_path(settings.vmodules_path, mod_path))
+			is_external:   true
+			tmp_path:      tmp_path
+			manifest:      manifest
+		}
+	} else {
+		// VPM registered module.
+		info := get_mod_vpm_info_with_selector(ident, mut selector) or {
+			p.module_error('failed to retrieve metadata for `${ident}`.', details: err.msg())
+			p.errors++
+			return
+		}
+		// Verify VCS.
+		vcs := if info.vcs != '' {
+			info_vcs := vcs_from_str(info.vcs) or {
+				p.module_error('skipping `${info.name}`, since it uses an unsupported version control system `${info.vcs}`.')
+				p.errors++
+				return
+			}
+			info_vcs
+		} else {
+			VCS.git
+		}
+		vcs.is_executable() or {
+			p.module_error(err.msg())
+			p.errors++
+			return
+		}
+		mod_path := normalize_mod_path(info.name.replace('.', os.path_separator))
+		tmp_path := get_tmp_path(settings.tmp_path, os.join_path(p.temporary_namespace, mod_path, version_tmp_name(version))) or {
+			p.module_error('failed to get temporary directory for `${ident}`.', details: err.msg())
+			p.errors++
+			return
+		}
+		resolved_version := clone_module_source(vcs, m, info.url, version, tmp_path, mut scope) or {
+			if p.probe {
+				p.last_error = 'failed to install `${m}`: ${err.msg()}'
+			} else {
+				report_module_clone_error(ident, m, version, err.msg())
+			}
+			rmdir_all(tmp_path) or {}
+			p.errors++
+			return
+		}
+		manifest := vmod.from_file(os.join_path(tmp_path, 'v.mod')) or {
+			// Add link with issue template requesting to add a manifest.
+			mut details := ''
+			new_issue_url := '${info.url}/issues/new'
+			verbose_println_more(@FILE_LINE, @FN, 'making a HEAD request to: ${new_issue_url} ...')
+			if resp := http.head(new_issue_url) {
+				if resp.status_code == 200 {
+					issue_tmpl_url := '${info.url}/issues/new?title=Missing%20Manifest&body=${info.name}%20is%20missing%20a%20manifest,%20please%20consider%20adding%20a%20v.mod%20file%20with%20the%20modules%20metadata.'
+					details = 'Please help us ensure future-compatibility, by adding a `v.mod` file or opening an issue at:\n`${issue_tmpl_url}`'
+				}
+			}
+			vpm_warn('`${info.name}` is missing a manifest file.', details: details)
+			vpm_log(@FILE_LINE, @FN, 'vpm manifest detection error: ${err}')
+			vmod.Manifest{}
+		}
+		Module{
+			name:          info.name
+			url:           info.url
+			version:       resolved_version
+			version_range: if is_version_range(version) { version } else { '' }
+			vcs:           vcs
+			install_path:  os.abs_path(os.join_path(settings.vmodules_path, mod_path))
+			tmp_path:      tmp_path
+			manifest:      manifest
+		}
+	}
+	mod.install_path_fmted = fmt_mod_path(mod.install_path)
+	mod.requested = m
+	mod.get_installed()
+	p.modules[key] = mod
+	if !p.shallow && mod.manifest.dependencies.len > 0 {
+		verbose_println('Found ${mod.manifest.dependencies.len} dependencies for `${mod.name}`: ${mod.manifest.dependencies}.')
+		for d in mod.manifest.dependencies {
+			p.parse_module(d, mut selector, mut scope)
+		}
+	}
+}
+
+fn is_local_repository(query string) bool {
+	if query.starts_with('file://') {
+		return true
+	}
+	mut path_candidates := [query]
+	if !query.starts_with('git@') {
+		ident, _ := query.rsplit_once('@') or { query, '' }
+		if ident != query {
+			path_candidates << ident
+		}
+	}
+	for candidate in path_candidates {
+		path := os.expand_tilde_to_home(candidate)
+		if os.is_abs_path(path) || path.starts_with('./') || path.starts_with('../')
+			|| path.starts_with('~/') {
+			return true
+		}
+		if os.exists(path) {
+			// A bare relative name like `vsl` is ambiguous: it might be a
+			// registered VPM module, or a like-named local directory in the
+			// caller's cwd.
+			abs_path := os.real_path(path)
+			vmodules_real := os.real_path(settings.vmodules_path)
+			if path_shadows_installed_module(abs_path, vmodules_real, settings.is_local) {
+				continue
+			}
+			return true
+		}
+	}
+	return false
+}
+
+// A path inside the module store is a previously installed module shadowing the
+// registered name, not a repository to clone: that keeps `v install vsl@<tag>`
+// working when cwd happens to be the module store (the test setup for versioned
+// installs does exactly this). Under `--local` that store is the project itself,
+// where only what VPM installed there is an installed module -- the directories
+// the project keeps are local repositories like anyone else's.
+fn path_shadows_installed_module(abs_path string, vmodules_real string, is_local bool) bool {
+	if abs_path == vmodules_real {
+		return true
+	}
+	if !abs_path.starts_with(vmodules_real + os.path_separator) {
+		return false
+	}
+	return !is_local || is_recorded_local_install(abs_path)
+}
+
+fn (mut m Module) get_installed() {
+	if m.url != '' && !m.existing_checkout_matches_source() {
+		return
+	}
+	refs := os.exec(['git', 'ls-remote', '--refs', m.install_path])
+	if refs.exit_code != 0 {
+		return
+	}
+	vpm_log(@FILE_LINE, @FN, 'refs: ${refs}')
+	m.is_installed = true
+	if m.version != '' && head_revision(m.install_path) == head_revision(m.tmp_path) {
+		m.installed_version = m.version
+		return
+	}
+	// In case the head just temporarily matches a tag, make sure that there
+	// really is a version installation before adding it as `installed_version`.
+	// NOTE: can be refined for branch installations. E.g., for `sdl`.
+	if refs.output.contains('refs/tags/') {
+		tag := refs.output.all_after_last('refs/tags/').all_before('\n').trim_space()
+		head := if refs.output.contains('refs/heads/') {
+			refs.output.all_after_last('refs/heads/').all_before('\n').trim_space()
+		} else {
+			tag
+		}
+		vpm_log(@FILE_LINE, @FN, 'head: ${head}, tag: ${tag}')
+		if tag == head {
+			m.installed_version = tag
+		}
+	}
+}
+
+fn (m Module) existing_checkout_matches_source() bool {
+	if !os.is_dir(m.install_path) {
+		return false
+	}
+	vcs := m.vcs or { settings.vcs }
+	existing_url := match vcs {
+		.git {
+			result := os.exec_opt(['git', '-C', m.install_path, 'remote', 'get-url', 'origin']) or {
+				return false
+			}
+			result.output.trim_space()
+		}
+		.hg {
+			result := os.exec_opt(['hg', '-R', m.install_path, 'paths', 'default']) or {
+				return false
+			}
+			result.output.trim_space()
+		}
+	}
+	return normalized_clone_source(existing_url) == normalized_clone_source(m.url)
+}
+
+fn normalized_clone_source(raw_source string) string {
+	raw := raw_source.trim_space()
+	mut local_path := os.expand_tilde_to_home(raw.trim_string_left('file://'))
+	// `file:///S:/x` keeps a slash before the drive letter. Drop it, or os.real_path
+	// resolves `/S:/x` against the current drive and gives `S:\S:\x`. Only Windows
+	// has drive letters: on POSIX `/a:/x` is an ordinary absolute path, so keep it.
+	$if windows {
+		if local_path.len > 2 && local_path[0] == `/` && local_path[1].is_letter()
+			&& local_path[2] == `:` {
+			local_path = local_path[1..]
+		}
+	}
+	if raw.starts_with('file://') || os.is_abs_path(local_path) || raw.starts_with('./')
+		|| raw.starts_with('../') || raw.starts_with('~/') || os.exists(local_path) {
+		return 'file://' + os.real_path(local_path)
+	}
+	return normalize_clone_source_url(raw) or { raw.trim_string_right('.git') }
+}
+
+fn get_tmp_path(unresolved_tmp_root string, relative_path string) !string {
+	if os.is_abs_path(relative_path) {
+		return error('temporary path `${relative_path}` is absolute')
+	}
+	if relative_path_has_parent_segment(relative_path) {
+		return error('temporary path `${relative_path}` contains a `..` segment')
+	}
+	joined := os.join_path(unresolved_tmp_root, relative_path)
+	if !nearest_tmp_ancestor_is_inside(unresolved_tmp_root, joined) {
+		return error('temporary path `${joined}` is outside `${os.real_path(unresolved_tmp_root)}`')
+	}
+	candidate := os.real_path(joined)
+	if !os.exists(candidate) {
+		return candidate
+	}
+	tmp_root := os.real_path(unresolved_tmp_root)
+	if !path_is_below(candidate, tmp_root) {
+		return error('temporary path `${candidate}` is outside `${tmp_root}`')
+	}
+	// It's unlikely that the tmp_path already exists, but it might
+	// occur if vpm was canceled during an installation or update.
+	rmdir_all(candidate)!
+	return candidate
+}
+
+// The nearest existing directory at or below the temp root. A missing final
+// component does not hide a symlink in the parent: real_path of that full
+// path fails and returns the unresolved string.
+fn nearest_tmp_ancestor_is_inside(unresolved_tmp_root string, path string) bool {
+	tmp_root := os.real_path(unresolved_tmp_root)
+	mut current := path
+	for current != unresolved_tmp_root && current != tmp_root {
+		if os.exists(current) {
+			resolved := os.real_path(current)
+			return resolved == tmp_root || path_is_below(resolved, tmp_root)
+		}
+		parent := os.dir(current)
+		if parent == current {
+			return false
+		}
+		current = parent
+	}
+	if !os.exists(current) {
+		return true
+	}
+	resolved := os.real_path(current)
+	return resolved == tmp_root || path_is_below(resolved, tmp_root)
+}
+
+fn relative_path_has_parent_segment(relative_path string) bool {
+	for segment in relative_path.split_any('/\\') {
+		if segment == '..' {
+			return true
+		}
+	}
+	return false
+}
+
+// module_error retains probe failures for the final requiring chain. A rejected
+// candidate must not print an error when an older release can resolve the graph.
+fn (mut p Parser) module_error(message string, opts ErrorOptions) {
+	p.last_error = message + if opts.details == '' { '' } else { '\n' + opts.details }
+	if !p.probe { vpm_error(message, opts) }
+}

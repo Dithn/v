@@ -1,17 +1,19 @@
 fn main() {}
 
 fn foo() string {
-    $if windows {
-        if true {
-            return ''
-        } else {
-            return ''
-        }
-    } $else {
-        if true {
-            return ''
-        } else {
-            return ''
-        }
-    }
+	a := 1
+	b := 1
+	$if windows {
+		if a == b {
+			return ''
+		} else {
+			return ''
+		}
+	} $else {
+		if a == b {
+			return ''
+		} else {
+			return ''
+		}
+	}
 }

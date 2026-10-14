@@ -1,11 +1,15 @@
 import sync
 
-const (
-	num_iterations = 10000
-)
+const num_iterations = 10000
 
-fn get_val_from_chan(ch chan i64) ?i64 {
-	r := <-ch ?
+// A result keeps the error a channel was closed with; an option only reports none.
+fn get_val_from_chan(ch chan i64) !i64 {
+	r := <-ch!
+	return r
+}
+
+fn get_opt_val_from_chan(ch chan i64) ?i64 {
+	r := <-ch?
 	return r
 }
 
@@ -14,7 +18,7 @@ fn do_rec_calc_send(chs []chan i64, mut sem sync.Semaphore) {
 	mut msg := ''
 	for {
 		mut s := get_val_from_chan(chs[0]) or {
-			msg = err.msg
+			msg = err.msg()
 			break
 		}
 		s++
@@ -27,7 +31,7 @@ fn do_rec_calc_send(chs []chan i64, mut sem sync.Semaphore) {
 fn test_channel_array_mut() {
 	mut chs := [chan i64{}, chan i64{cap: 10}]
 	mut sem := sync.new_semaphore()
-	go do_rec_calc_send(chs, mut sem)
+	spawn do_rec_calc_send(chs, mut sem)
 	mut t := i64(100)
 	for _ in 0 .. num_iterations {
 		chs[0] <- t
@@ -36,4 +40,24 @@ fn test_channel_array_mut() {
 	chs[0].close()
 	sem.wait()
 	assert t == 100 + num_iterations
+}
+
+fn test_channel_close_with_error_propagates_after_buffer_drain() {
+	ch := chan i64{cap: 1}
+	ch <- i64(7)
+	ch.close(error('async failure'))
+	assert <-ch == i64(7)
+	_ := get_val_from_chan(ch) or {
+		assert err.msg() == 'async failure'
+		return
+	}
+	assert false
+}
+
+fn test_channel_close_propagates_none_through_an_option() {
+	ch := chan i64{cap: 1}
+	ch <- i64(7)
+	ch.close(error('async failure'))
+	assert get_opt_val_from_chan(ch) or { -1 } == i64(7)
+	assert get_opt_val_from_chan(ch) or { -1 } == i64(-1)
 }

@@ -6,19 +6,19 @@ for addr in [
 	'steampowered.com:80',
 	'api.steampowered.com:80',
 ] {
-	println('$addr')
+	println('${addr}')
 
-	for @type in [net.SocketType.tcp, .udp] {
+	for type in [net.SocketType.tcp, .udp] {
 		family := net.AddrFamily.unspec
 
-		addrs := net.resolve_addrs(addr, family, @type) or {
+		addrs := net.resolve_addrs(addr, family, type) or {
 			println('> None')
 			continue
 		}
 
 		for a in addrs {
 			f := a.family()
-			println('> $a $f ${@type}')
+			println('> ${a} ${f} ${type}')
 		}
 	}
 }

@@ -1,154 +1,197 @@
 CC ?= cc
+VEXE ?= ./v
+VFLAGS ?=
 CFLAGS ?=
 LDFLAGS ?=
-TMPDIR ?= /tmp
-VROOT  ?= .
-VC     ?= ./vc
-V      ?= ./v
-VCREPO ?= https://github.com/vlang/vc
-TCCREPO ?= https://github.com/vlang/tccbin
 
-VCFILE := v.c
-TMPTCC := $(VROOT)/thirdparty/tcc
-TCCOS := unknown
-TCCARCH := unknown
-GITCLEANPULL := git clean -xf && git pull --quiet
-GITFASTCLONE := git clone --depth 1 --quiet --single-branch
+# Portable VC snapshots do not embed V3. Keep their v1 executable on the full
+# compatibility compiler path even when the generated C is built on a V3 host.
+VC_BOOTSTRAP_DEFINE = -DCUSTOM_DEFINE_v1_fallback
 
-#### Platform detections and overrides:
-_SYS := $(shell uname 2>/dev/null || echo Unknown)
-_SYS := $(patsubst MSYS%,MSYS,$(_SYS))
-_SYS := $(patsubst MINGW%,MinGW,$(_SYS))
+all: download_vc v
 
-ifneq ($(filter $(_SYS),MSYS MinGW),)
-WIN32 := 1
-V:=./v.exe
-endif
+.PHONY: all check download_vc install v v1
 
-ifeq ($(_SYS),Linux)
-LINUX := 1
-TCCOS := linux
-endif
+download_vc:
+	@set -e; \
+	if [ -f vc/v.c ]; then \
+		if command -v git >/dev/null 2>&1; then \
+			git -C vc/ pull --rebase; \
+		else \
+			echo "git not found; using existing vc/v.c"; \
+		fi; \
+	else \
+		if command -v git >/dev/null 2>&1; then \
+			git clone --filter=blob:none https://github.com/vlang/vc vc/; \
+		else \
+			echo "git is required to download vc/. Please install git or provide vc/v.c."; \
+			exit 1; \
+		fi; \
+	fi
 
-ifeq ($(_SYS),Darwin)
-MAC := 1
-TCCOS := macos
-endif
+v:
+	@set -e; \
+	sys=`uname -s 2>/dev/null || echo unknown`; \
+	arch=`uname -m 2>/dev/null || echo unknown`; \
+	set -- $(CFLAGS); \
+	ccflags=; \
+	unsafe_o=0; \
+	for arg do \
+		case "$$arg" in \
+			-O|-O0|-O1) \
+				ccflags="$$ccflags $$arg"; \
+				;; \
+			-O*) \
+				ccflags="$$ccflags $$arg"; \
+				unsafe_o=1; \
+				;; \
+			*) \
+				ccflags="$$ccflags $$arg"; \
+				;; \
+		esac; \
+	done; \
+	ccflags=$${ccflags# }; \
+	bootstrap_ccflags=$$ccflags; \
+	set -- $(LDFLAGS); \
+	ldflags=; \
+	for arg do \
+		ldflags="$$ldflags $$arg"; \
+	done; \
+	ldflags=$${ldflags# }; \
+	case "$$sys" in \
+		Linux) \
+			case "$$arch" in \
+				arm*) \
+					ldflags="$$ldflags -latomic"; \
+					;; \
+			esac; \
+			;; \
+		FreeBSD|NetBSD|OpenBSD) \
+			ldflags="$$ldflags -lexecinfo"; \
+			;; \
+	esac; \
+	ccflags=$${ccflags# }; \
+	ldflags=$${ldflags# }; \
+	if [ "$$sys" = Linux ]; then \
+		case "$$arch" in \
+			arm64|aarch64) \
+				if [ $$unsafe_o -eq 1 ]; then \
+					set -- $$ccflags; \
+					bootstrap_ccflags=; \
+					for arg do \
+						case "$$arg" in \
+							-O|-O0|-O1) \
+								bootstrap_ccflags="$$bootstrap_ccflags $$arg"; \
+								;; \
+							-O*) \
+								bootstrap_ccflags="$$bootstrap_ccflags -O1"; \
+								;; \
+							*) \
+								bootstrap_ccflags="$$bootstrap_ccflags $$arg"; \
+								;; \
+						esac; \
+					done; \
+					bootstrap_ccflags=$${bootstrap_ccflags# }; \
+				fi; \
+				;; \
+		esac; \
+	fi; \
+	bootstrap_gcflags="-gc none"; \
+	case " $(VFLAGS) " in \
+		*" -gc "*|*" -gc="*) bootstrap_gcflags="";; \
+	esac; \
+	bootstrap_ccompiler=; \
+	case " $(VFLAGS) " in \
+		*" -cc "*|*" -cc="*) ;; \
+		*) \
+			case "$$sys" in \
+				Linux|FreeBSD|NetBSD|OpenBSD|DragonFly) \
+					case "$$arch" in \
+						arm64|aarch64) bootstrap_ccompiler="$(CC)";; \
+					esac; \
+					;; \
+			esac; \
+			;; \
+	esac; \
+	sh cmd/tools/vc_compat.sh vc/v.c $(CC) $$bootstrap_ccflags $(VC_BOOTSTRAP_DEFINE) -std=gnu11 -w -o v1 -- -lm -lpthread $$ldflags || cmd/tools/cc_compilation_failed_non_windows.sh; \
+	set -- ./v1 -no-parallel -o v2 $$bootstrap_gcflags $(VFLAGS); \
+	if [ -n "$$bootstrap_ccompiler" ]; then \
+		set -- "$$@" -cc "$$bootstrap_ccompiler"; \
+	fi; \
+	if [ -n "$$bootstrap_ccflags" ]; then \
+		set -- "$$@" -cflags "$$bootstrap_ccflags"; \
+	fi; \
+	if [ -n "$$ldflags" ]; then \
+		set -- "$$@" -ldflags "$$ldflags"; \
+	fi; \
+	set -- "$$@" cmd/v; \
+	"$$@"; \
+	set -- ./v2 -o v $$bootstrap_gcflags $(VFLAGS); \
+	if [ -n "$$bootstrap_ccompiler" ]; then \
+		set -- "$$@" -cc "$$bootstrap_ccompiler"; \
+	fi; \
+	if [ -n "$$ccflags" ]; then \
+		set -- "$$@" -cflags "$$ccflags"; \
+	fi; \
+	if [ -n "$$ldflags" ]; then \
+		set -- "$$@" -ldflags "$$ldflags"; \
+	fi; \
+	set -- "$$@" cmd/v; \
+	"$$@"; \
+	rm -rf v1 v2; \
+	./v -new-compiler run ./cmd/tools/detect_tcc.v; \
+	echo "V has been successfully built"; \
+	./v version; \
+	./v -new-compiler run .github/problem-matchers/register_all.vsh
 
-ifeq ($(_SYS),FreeBSD)
-TCCOS := freebsd
-LDFLAGS += -lexecinfo
-endif
+v1:
+	@set -e; \
+	sys=`uname -s 2>/dev/null || echo unknown`; \
+	arch=`uname -m 2>/dev/null || echo unknown`; \
+	set -- $(CFLAGS); \
+	bootstrap_ccflags=; \
+	unsafe_o=0; \
+	for arg do \
+		case "$$arg" in \
+			-O|-O0|-O1) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+			-O*) bootstrap_ccflags="$$bootstrap_ccflags $$arg"; unsafe_o=1;; \
+			*) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+		esac; \
+	done; \
+	bootstrap_ccflags=$${bootstrap_ccflags# }; \
+	set -- $(LDFLAGS); \
+	ldflags=; \
+	for arg do ldflags="$$ldflags $$arg"; done; \
+	ldflags=$${ldflags# }; \
+	case "$$sys" in \
+		Linux) case "$$arch" in arm*) ldflags="$$ldflags -latomic";; esac;; \
+		FreeBSD|NetBSD|OpenBSD) ldflags="$$ldflags -lexecinfo";; \
+	esac; \
+	ldflags=$${ldflags# }; \
+	if [ "$$sys" = Linux ]; then \
+		case "$$arch" in \
+			arm64|aarch64) \
+				if [ $$unsafe_o -eq 1 ]; then \
+					set -- $$bootstrap_ccflags; \
+					bootstrap_ccflags=; \
+					for arg do \
+						case "$$arg" in \
+							-O|-O0|-O1) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+							-O*) bootstrap_ccflags="$$bootstrap_ccflags -O1";; \
+							*) bootstrap_ccflags="$$bootstrap_ccflags $$arg";; \
+						esac; \
+					done; \
+					bootstrap_ccflags=$${bootstrap_ccflags# }; \
+				fi;; \
+		esac; \
+	fi; \
+	CC='$(CC)' OLDV_CCOPTIONS='$(CPPFLAGS) '"$$bootstrap_ccflags" \
+		OLDV_LDFLAGS="$$ldflags" \
+		cmd/tools/install_v1_fallback.sh '$(VEXE)' './v1_fallback'; \
+	echo "Built V1 compatibility compiler: ./v1_fallback"
 
-ifeq ($(_SYS),NetBSD)
-TCCOS := netbsd
-LDFLAGS += -lexecinfo
-endif
+check:
+	./v test-all
 
-ifdef ANDROID_ROOT
-ANDROID := 1
-undefine LINUX
-TCCOS := android
-endif
-#####
-
-ifdef WIN32
-TCCOS := windows
-VCFILE := v_win.c
-endif
-
-TCCARCH := $(shell uname -m 2>/dev/null || echo unknown)
-
-ifeq ($(TCCARCH),x86_64)
-	TCCARCH := amd64
-else
-ifneq ($(filter x86%,$(TCCARCH)),)
-	TCCARCH := i386
-else
-ifeq ($(TCCARCH),arm64)
-	TCCARCH := arm64
-else
-ifneq ($(filter arm%,$(TCCARCH)),)
-	TCCARCH := arm
-# otherwise, just use the arch name
-endif
-endif
-endif
-endif
-
-.PHONY: all clean fresh_vc fresh_tcc
-
-ifdef prod
-VFLAGS+=-prod
-endif
-
-all: latest_vc latest_tcc
-ifdef WIN32
-	$(CC) $(CFLAGS) -std=c99 -municode -w -o $(V) $(VC)/$(VCFILE) $(LDFLAGS)
-	$(V) -o v2.exe $(VFLAGS) cmd/v
-	move /y v2.exe v.exe
-else
-	$(CC) $(CFLAGS) -std=gnu99 -w -o $(V) $(VC)/$(VCFILE) -lm -lpthread $(LDFLAGS)
-	$(V) -o v2.exe $(VFLAGS) cmd/v
-	mv -f v2.exe v
-endif
-	@echo "V has been successfully built"
-	@$(V) -version
-
-clean:
-	rm -rf $(TMPTCC)
-	rm -rf $(VC)
-
-ifndef local
-latest_vc: $(VC)/.git/config
-	cd $(VC) && $(GITCLEANPULL)
-else
-latest_vc:
-	@echo "Using local vc"
-endif
-
-fresh_vc:
-	rm -rf $(VC)
-	$(GITFASTCLONE) $(VCREPO) $(VC)
-
-ifndef local
-latest_tcc: $(TMPTCC)/.git/config
-	cd $(TMPTCC) && $(GITCLEANPULL)
-else
-latest_tcc:
-	@echo "Using local tcc"
-endif
-
-fresh_tcc:
-	rm -rf $(TMPTCC)
-ifndef local
-# Check wether a TCC branch exists for the user's system configuration.
-ifneq (,$(findstring thirdparty-$(TCCOS)-$(TCCARCH), $(shell git ls-remote --heads $(TCCREPO) | sed 's/^[a-z0-9]*\trefs.heads.//')))
-	$(GITFASTCLONE) --branch thirdparty-$(TCCOS)-$(TCCARCH) $(TCCREPO) $(TMPTCC)
-else
-	@echo 'Pre-built TCC not available for thirdparty-$(TCCOS)-$(TCCARCH) at $(TCCREPO), will use the system compiler: $(CC)'
-	$(GITFASTCLONE) --branch thirdparty-unknown-unknown $(TCCREPO) $(TMPTCC)
-endif
-else
-	@echo "Using local tccbin"
-endif
-
-$(TMPTCC)/.git/config:
-	$(MAKE) fresh_tcc
-
-$(VC)/.git/config:
-	$(MAKE) fresh_vc
-
-asan:
-	$(MAKE) all CFLAGS='-fsanitize=address,undefined'
-
-selfcompile:
-	$(V) -cg -o v cmd/v
-
-selfcompile-static:
-	$(V) -cg -cflags '--static' -o v-static cmd/v
-
-### NB: Please keep this Makefile and make.bat simple.
 install:
-	@echo 'Please use `sudo ./v symlink` instead.'
-
+	@echo 'Please use `sudo ./v symlink` instead, or manually add the current directory to your PATH.'

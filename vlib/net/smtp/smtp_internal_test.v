@@ -1,0 +1,542 @@
+module smtp
+
+import encoding.base64
+import os
+import rand
+import time
+
+fn test_mail_message_data_with_attachment_has_valid_multipart_boundaries() {
+	mail := Mail{
+		from:        'sender@example.com'
+		to:          'receiver@example.com'
+		subject:     'Multipart test'
+		body:        'message body'
+		boundary:    'test-boundary'
+		attachments: [
+			Attachment{
+				filename: 'note.txt'
+				bytes:    'attachment'.bytes()
+			},
+		]
+	}
+
+	message := mail.message_data()
+
+	assert message.contains('Content-Type: multipart/mixed; boundary="test-boundary"\r\n\r\n--test-boundary\r\n')
+	assert message.contains('Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\nbWVzc2FnZSBib2R5\r\n--test-boundary\r\n')
+	assert message.contains('Content-Disposition: attachment; filename="note.txt"\r\n\r\nYXR0YWNobWVudA==\r\n--test-boundary--\r\n.\r\n')
+	assert !message.contains('Content-Type: multipart/mixed; boundary="test-boundary"\r\n--test-boundary\r\n')
+	assert !message.contains('YXR0YWNobWVudA==\r\n--test-boundary\r\n.\r\n')
+}
+
+fn test_mail_message_data_with_text_and_html_uses_multipart_alternative() {
+	mail := Mail{
+		from:     'sender@example.com'
+		to:       'receiver@example.com'
+		subject:  'Multipart alternative test'
+		body:     'legacy body'
+		boundary: 'test-boundary'
+		text:     Message{
+			body: 'text body'
+		}
+		html:     Message{
+			body: '<h1>Hello</h1>'
+		}
+	}
+
+	message := mail.message_data()
+
+	assert message.contains('MIME-Version: 1.0\r\nContent-Type: multipart/alternative; boundary="test-boundary"\r\n\r\n--test-boundary\r\n')
+	assert message.contains('Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64.encode_str('text body')}\r\n--test-boundary\r\n')
+	assert message.contains('Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64.encode_str('<h1>Hello</h1>')}\r\n--test-boundary--\r\n.\r\n')
+	assert !message.contains(base64.encode_str('legacy body'))
+	assert !message.contains('multipart/mixed')
+}
+
+fn test_mail_message_data_with_text_html_and_attachment_uses_nested_multipart() {
+	mail := Mail{
+		from:     'sender@example.com'
+		to:       'receiver@example.com'
+		subject:  'Multipart mixed test'
+		boundary: 'test-boundary'
+		text:     Message{
+			body: 'text body'
+		}
+		html:     Message{
+			body:        '<p>Hello</p>'
+			attachments: [
+				Attachment{
+					filename: 'note.txt'
+					bytes:    'attachment'.bytes()
+				},
+			]
+		}
+	}
+
+	message := mail.message_data()
+
+	assert message.contains('Content-Type: multipart/mixed; boundary="test-boundary"\r\n\r\n--test-boundary\r\nContent-Type: multipart/alternative; boundary="test-boundary-alternative"\r\n\r\n--test-boundary-alternative\r\n')
+	assert message.contains('Content-Type: text/plain; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64.encode_str('text body')}\r\n--test-boundary-alternative\r\n')
+	assert message.contains('Content-Type: text/html; charset=UTF-8\r\nContent-Transfer-Encoding: base64\r\n\r\n${base64.encode_str('<p>Hello</p>')}\r\n--test-boundary-alternative--\r\n')
+	assert message.contains('--test-boundary\r\nContent-Type: application/octet-stream\r\nContent-Transfer-Encoding: base64\r\nContent-Disposition: attachment; filename="note.txt"\r\n\r\n${base64.encode_str('attachment')}\r\n--test-boundary--\r\n.\r\n')
+}
+
+fn test_fold_base64_wraps_long_lines() {
+	lines := fold_base64(base64.encode_str('0123456789'.repeat(8))).split('\r\n')
+
+	assert lines.len == 2
+	assert lines[0].len == 76
+	assert lines[1].len == 32
+}
+
+fn test_envelope_addr_strips_display_name() {
+	assert envelope_addr('ivan@example.com') == 'ivan@example.com'
+	assert envelope_addr('  ivan@example.com  ') == 'ivan@example.com'
+	assert envelope_addr('<ivan@example.com>') == 'ivan@example.com'
+	assert envelope_addr('Ivan Petrov <ivan@example.com>') == 'ivan@example.com'
+	assert envelope_addr('"Petrov, Ivan" <ivan@example.com>') == 'ivan@example.com'
+	assert envelope_addr('copy@example.com (team)') == 'copy@example.com'
+	assert envelope_addr('copy(comment) @ example.com') == 'copy@example.com'
+	assert envelope_addr('"copy (team)"@example.com') == '"copy (team)"@example.com'
+	// Quoted local-parts may legitimately contain '<'. Without a trailing '>',
+	// the input is not an angle-addr wrapper and must pass through unchanged.
+	assert envelope_addr('"a<b"@example.com') == '"a<b"@example.com'
+	// Quoted display name and quoted local-part both containing '<'/'>'.
+	assert envelope_addr('"a<b" <"a<b"@example.com>') == '"a<b"@example.com'
+	// Escaped quote inside a quoted display name must not end the quoted run.
+	assert envelope_addr('"a\\"<b" <ivan@example.com>') == 'ivan@example.com'
+	// Angle brackets inside a quoted local-part must not be treated as the
+	// envelope separator — only the outermost '<' / '>' pair counts.
+	assert envelope_addr('User <"a>b"@example.com>') == '"a>b"@example.com'
+	assert envelope_addr('User <"a>b@c<d"@example.com>') == '"a>b@c<d"@example.com'
+	// Angle brackets inside nested comments are not the angle-addr separator.
+	commented := 'John (manager (region <east>) \\) lead) <john@example.com>'
+	assert envelope_addr(commented) == 'john@example.com'
+	assert format_addr(commented).ends_with('<john@example.com>')
+	// Malformed input (no closing '>') passes through; the server can reject.
+	assert envelope_addr('Ivan <ivan@example.com') == 'Ivan <ivan@example.com'
+	// A bare address must still be CRLF-sanitized to keep the newline out of RCPT TO.
+	assert envelope_addr('victim@example.com\nX-Evil: yes') == 'victim@example.comX-Evil: yes'
+}
+
+fn test_mail_message_data_preserves_display_name_in_from_header() {
+	mail := Mail{
+		from:    'Ivan Petrov <ivan@example.com>'
+		to:      'recipient@example.com'
+		subject: 'Test'
+		body:    'hi'
+	}
+
+	message := mail.message_data()
+
+	// the display name is preserved and quoted per RFC 5322
+	assert message.contains('From: "Ivan Petrov" <ivan@example.com>\r\n')
+}
+
+fn test_mail_message_data_wraps_bare_from_addr() {
+	mail := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com'
+		subject: 'Test'
+		body:    'hi'
+	}
+
+	message := mail.message_data()
+
+	// a bare from address is wrapped in angle brackets
+	assert message.contains('From: <sender@example.com>\r\n')
+}
+
+fn test_mail_message_data_encodes_non_ascii_from() {
+	// non-ASCII display names must become an RFC 2047 encoded-word, not raw UTF-8
+	mail := Mail{
+		from:    'Иван Петров <ivan@example.com>'
+		to:      'recipient@example.com'
+		subject: 'Test'
+		body:    'hi'
+	}
+
+	message := mail.message_data()
+
+	assert message.contains('From: =?utf-8?B?0JjQstCw0L0g0J/QtdGC0YDQvtCy?= <ivan@example.com>\r\n')
+}
+
+fn test_mail_message_data_omits_empty_cc_and_bcc_headers() {
+	mail := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com'
+		subject: 'No cc/bcc test'
+	}
+
+	message := mail.message_data()
+
+	// empty Cc/Bcc must not produce an empty header line
+	assert !message.contains('Cc:')
+	assert !message.contains('Bcc:')
+}
+
+fn test_mail_message_data_omits_empty_to_for_bcc_only_mail() {
+	mail := Mail{
+		from:    'sender@example.com'
+		bcc:     'hidden@example.com'
+		subject: 'Bcc-only test'
+	}
+
+	message := mail.message_data()
+
+	assert !message.contains('To:')
+	assert !message.contains('Bcc:')
+}
+
+fn test_mail_message_data_includes_cc_header_but_omits_bcc() {
+	mail := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com; '
+		cc:      '<copy@example.com>; One <one@example.com>;'
+		bcc:     'hidden@example.com;Two <two@example.com>'
+		subject: 'Cc/bcc test'
+	}
+
+	message := mail.message_data()
+
+	// ';'-separated input becomes a ','-joined Cc header.
+	assert message.contains('Cc: <copy@example.com>, "One" <one@example.com>\r\n')
+	// Bcc addresses are envelope-only per RFC 5321; they must not appear in DATA headers.
+	assert !message.contains('Bcc:')
+}
+
+fn test_mail_message_data_formats_to_header() {
+	// bare ';'-separated addresses become a ','-joined list
+	mail := Mail{
+		from:    'sender@example.com'
+		to:      'a@ex.com;b@ex.com'
+		subject: 'To test'
+	}
+	message := mail.message_data()
+	assert message.contains('To: <a@ex.com>, <b@ex.com>\r\n')
+
+	// a display name is quoted instead of producing nested angle brackets
+	mail2 := Mail{
+		from:    'sender@example.com'
+		to:      'Ivan Petrov <ivan@example.com>'
+		subject: 'To test'
+	}
+	message2 := mail2.message_data()
+	assert message2.contains('To: "Ivan Petrov" <ivan@example.com>\r\n')
+}
+
+fn test_mail_message_data_encodes_non_ascii_subject() {
+	// an ASCII subject stays raw
+	mail := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com'
+		subject: 'Hello world'
+	}
+	message := mail.message_data()
+	assert message.contains('Subject: Hello world\r\n')
+
+	// a non-ASCII subject becomes an RFC 2047 encoded-word, not raw UTF-8
+	mail2 := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com'
+		subject: 'Привет мир'
+	}
+	message2 := mail2.message_data()
+	assert message2.contains('Subject: =?utf-8?B?0J/RgNC40LLQtdGCINC80LjRgA==?=\r\n')
+
+	// ASCII controls are encoded so they cannot inject additional headers.
+	mail3 := Mail{
+		from:    'sender@example.com'
+		to:      'receiver@example.com'
+		subject: 'Hello\r\nBcc: injected@example.com'
+	}
+	message3 := mail3.message_data()
+	assert message3.contains('Subject: =?utf-8?B?')
+	assert !message3.contains('\r\nBcc: injected@example.com')
+}
+
+fn test_encode_rfc2047_splits_long_utf8_without_cutting_characters() {
+	original := 'Привет мир '.repeat(12)
+	encoded := encode_rfc2047(original)
+	words := encoded.split('\r\n ')
+	assert words.len > 1
+	mut decoded := ''
+	for word in words {
+		assert word.starts_with('=?utf-8?B?')
+		assert word.ends_with('?=')
+		assert word.len <= 75
+		decoded += base64.decode_str(word[10..word.len - 2])
+	}
+	assert decoded == original
+}
+
+fn test_long_encoded_headers_are_folded_below_the_hard_line_limit() {
+	mail := Mail{
+		from:    'Ж'.repeat(315) + ' <sender@example.com>'
+		to:      'receiver@example.com'
+		subject: 'Ж'.repeat(315)
+	}
+	message := mail.message_data()
+	assert message.contains('\r\n =?utf-8?B?')
+	for line in message.split('\r\n') {
+		assert line.len <= 998
+	}
+}
+
+fn test_format_addr() {
+	// a bare or already angle-wrapped address keeps its addr-spec
+	assert format_addr('user@ex.com') == '<user@ex.com>'
+	assert format_addr('<user@ex.com>') == '<user@ex.com>'
+
+	// a display name is quoted and angle-wrapped
+	assert format_addr('User <user@ex.com>') == '"User" <user@ex.com>'
+	assert format_addr('John Smith <john@ex.com>') == '"John Smith" <john@ex.com>'
+	assert format_addr('John "Q." Public <john@example.com>') == '"John Q. Public" <john@example.com>'
+	assert format_addr('John" Q." Public <john@example.com>') == '"John Q. Public" <john@example.com>'
+	assert format_addr('John"Q." Public <john@example.com>') == '"JohnQ. Public" <john@example.com>'
+	assert format_addr('=?UTF-8?B?Sm9zw6k=?= <jose@example.com>') == '=?UTF-8?B?Sm9zw6k=?= <jose@example.com>'
+	assert format_addr('"=?UTF-8?B?Sm9zw6k=?=" <jose@example.com>') == '"=?UTF-8?B?Sm9zw6k=?=" <jose@example.com>'
+	assert format_addr('=?UTF-8?Q?Jos=C3=A9?= =?UTF-8?Q?_Silva?= <jose@example.com>') == '=?UTF-8?Q?Jos=C3=A9?=\r\n =?UTF-8?Q?_Silva?= <jose@example.com>'
+	assert format_addr('=?UTF-8?B?Sm9zw6k=?= Silva <jose@example.com>') == '=?UTF-8?B?Sm9zw6k=?=\r\n Silva <jose@example.com>'
+	assert format_addr('=?UTF-8?B?Sm9zw6k=?= "da Silva" <jose@example.com>') == '=?UTF-8?B?Sm9zw6k=?=\r\n "da Silva" <jose@example.com>'
+	assert format_addr('=?UTF-8?B?Sm9zw6k=?= "Иван" <jose@example.com>') == '=?UTF-8?B?Sm9zw6k=?=\r\n =?utf-8?B?INCY0LLQsNC9?= <jose@example.com>'
+	assert format_addr('=?UTF-8?B?Sm9zw6k=?= Иван <jose@example.com>') == '=?UTF-8?B?Sm9zw6k=?=\r\n =?utf-8?B?INCY0LLQsNC9?= <jose@example.com>'
+	assert format_addr('"=?UTF-8?B?Sm9zw6k=?=" Silva <jose@example.com>') == '"=?UTF-8?B?Sm9zw6k=?= Silva" <jose@example.com>'
+	encoded_word := '=?UTF-8?B?Sm9zw6k=?='
+	long_encoded_name := []string{len: 50, init: encoded_word}.join(' ')
+	for line in format_addr('${long_encoded_name} <jose@example.com>').split('\r\n') {
+		assert line.len <= 998
+	}
+
+	// Quotes around a phrase word are syntax and do not become visible text.
+	assert format_addr('John "The Boss" <john@ex.com>') == '"John The Boss" <john@ex.com>'
+	// Literal quotes can be represented as quoted-pairs inside a quoted name.
+	assert format_addr('"John \\"The Boss\\"" <john@ex.com>') == '"John \\"The Boss\\"" <john@ex.com>'
+
+	assert format_addr('C:\\Users <user@ex.com>') == '"C:\\\\Users" <user@ex.com>'
+	// Comments outside the quoted display name stay comments semantically: they
+	// are removed rather than folded into the generated quoted-string.
+	assert format_addr('John (manager) <john@example.com>') == '"John" <john@example.com>'
+	assert format_addr('"John (manager)" <john@example.com>') == '"John (manager)" <john@example.com>'
+
+	// an even number of backslashes before the closing quote must not defeat
+	// quote stripping; quoted-pairs are decoded to their underlying character
+	// before re-escaping on output.
+	assert format_addr('"A\\(B" <x@example.com>') == '"A(B" <x@example.com>'
+	// a quoted-pair may encode a literal backslash at the end of the name
+	assert format_addr('"A\\\\" <x@example.com>') == '"A\\\\" <x@example.com>'
+
+	// non-ASCII display names become an RFC 2047 encoded-word
+	assert format_addr('Иван Петров <ivan@ex.com>') == '=?utf-8?B?0JjQstCw0L0g0J/QtdGC0YDQvtCy?= <ivan@ex.com>'
+	assert format_addr('"Иван Петров" <ivan@ex.com>') == '=?utf-8?B?0JjQstCw0L0g0J/QtdGC0YDQvtCy?= <ivan@ex.com>'
+	assert format_addr('Иван "Петров" <ivan@ex.com>') == '=?utf-8?B?0JjQstCw0L0g0J/QtdGC0YDQvtCy?= <ivan@ex.com>'
+
+	// CR/LF inside a display name must be stripped to prevent header injection
+	// via SMTP DATA.  Two occurrences verify the replacement covers the whole
+	// string, not just the first match.
+	assert format_addr('Bad\r\nX\r\nEvil <a@b.com>') == '"BadXEvil" <a@b.com>'
+	// CRLF inside the addr-spec is stripped too, so it cannot leak into the
+	// SMTP envelope or the header.
+	assert format_addr('<a@b.com\r\nX: evil>') == '<a@b.comX: evil>'
+	// A bare address must still be CRLF-sanitized to keep the newline out of the header.
+	assert format_addr('victim@example.com\nX-Evil: yes') == '<victim@example.comX-Evil: yes>'
+}
+
+fn test_format_addr_list() {
+	// an empty or whitespace-only list produces no header content
+	assert format_addr_list('') == ''
+	assert format_addr_list('   ') == ''
+
+	// a single address is formatted just like format_addr
+	assert format_addr_list('user@ex.com') == '<user@ex.com>'
+	assert format_addr_list('<user@ex.com>') == '<user@ex.com>'
+
+	// input is ';'-separated; output is ','-joined, empty entries dropped
+	assert format_addr_list('a@ex.com;b@ex.com') == '<a@ex.com>, <b@ex.com>'
+	assert format_addr_list('User <a@ex.com>; b@ex.com') == '"User" <a@ex.com>, <b@ex.com>'
+	assert format_addr_list('a@ex.com;;b@ex.com') == '<a@ex.com>, <b@ex.com>'
+	assert format_addr_list('John <a@ex.com>; Bob <b@ex.com>') == '"John" <a@ex.com>, "Bob" <b@ex.com>'
+
+	// a comma inside a quoted display name must survive formatting
+	assert format_addr_list('"Doe, John" <john.doe@ex.com>') == '"Doe, John" <john.doe@ex.com>'
+	assert format_addr_list('"Doe, John" <john.doe@ex.com>; "Roe, Jane" <jane@ex.com>') == '"Doe, John" <john.doe@ex.com>, "Roe, Jane" <jane@ex.com>'
+	assert format_addr_list('"Doe; John" <john.doe@ex.com>; next@ex.com') == '"Doe; John" <john.doe@ex.com>, <next@ex.com>'
+	assert format_addr_list('"semi;colon"@ex.com; next@ex.com') == '<"semi;colon"@ex.com>, <next@ex.com>'
+	commented := 'John (sales; (east; coast)) <john@ex.com>; next@ex.com'
+	parts := split_recipient_list(commented)
+	assert parts.len == 2
+	assert envelope_addr(parts[0]) == 'john@ex.com'
+	assert envelope_addr(parts[1]) == 'next@ex.com'
+
+	// each non-ASCII display name is encoded independently
+	assert format_addr_list('Иван Петров <ivan@ex.com>') == '=?utf-8?B?0JjQstCw0L0g0J/QtdGC0YDQvtCy?= <ivan@ex.com>'
+	assert format_addr_list('Иван <ivan@ex.com>; John <a@ex.com>') == '=?utf-8?B?0JjQstCw0L0=?= <ivan@ex.com>, "John" <a@ex.com>'
+}
+
+fn test_tls_hostname_normalizes_bracketed_ipv6() {
+	assert normalize_tls_hostname('[2001:db8::1]') == '2001:db8::1'
+	assert normalize_tls_hostname('2001:db8::1') == '2001:db8::1'
+	assert normalize_tls_hostname('smtp.example.com') == 'smtp.example.com'
+}
+
+fn test_send_auth_rejects_plaintext_credentials() {
+	mut client := Client{
+		Config: Config{
+			username: 'user'
+			password: 'password'
+		}
+	}
+	client.send_auth() or {
+		assert err.msg().contains('refusing to send credentials without TLS')
+		return
+	}
+	assert false, 'send_auth must enforce the TLS requirement itself'
+}
+
+fn test_tls_validation_rejects_untrusted_and_mismatched_certificates_before_auth() ! {
+	python := os.find_abs_path_of_executable('python3') or {
+		os.find_abs_path_of_executable('python') or {
+			eprintln('Skipping SMTP TLS integration test: Python is not installed')
+			return
+		}
+	}
+	cert_dir := os.join_path(@VMODROOT, 'examples', 'ssl_server', 'cert')
+	server_cert := os.join_path(cert_dir, 'server.crt')
+	server_key := os.join_path(cert_dir, 'server.key')
+	ca_bundle := os.join_path(cert_dir, 'ca.crt')
+	untrusted_bundle := os.join_path(cert_dir, 'client.crt')
+	assert os.exists(server_cert) && os.exists(server_key) && os.exists(ca_bundle)
+
+	for starttls in [false, true] {
+		assert smtp_tls_test_case(python, starttls, 'localhost', ca_bundle, server_cert,
+			server_key)! == 'CONNECTED:AUTH'
+		assert smtp_tls_test_case(python, starttls, '127.0.0.1', ca_bundle, server_cert,
+			server_key)! == 'REJECTED:NO_AUTH'
+		assert smtp_tls_test_case(python, starttls, 'localhost', untrusted_bundle, server_cert,
+			server_key)! == 'REJECTED:NO_AUTH'
+	}
+}
+
+fn smtp_tls_test_case(python string, starttls bool, hostname string, verify string, cert string,
+	key string) !string {
+	helper := os.join_path(@VMODROOT, 'vlib', 'net', 'smtp', 'smtp_tls_test_server.py')
+	assert os.exists(helper)
+	prefix := os.join_path(os.temp_dir(), 'v_smtp_tls_${rand.uuid_v4()}')
+	ready_path := '${prefix}.ready'
+	result_path := '${prefix}.result'
+	mut server := os.new_process(python)
+	server.set_work_folder(@VMODROOT)
+	server.set_args([
+		helper,
+		if starttls { 'starttls' } else { 'implicit' },
+		hostname,
+		cert,
+		key,
+		ready_path,
+		result_path,
+	])
+	server.run()
+	defer {
+		if server.is_alive() {
+			server.signal_kill()
+		}
+		server.wait()
+		server.close()
+		os.rm(ready_path) or {}
+		os.rm(result_path) or {}
+	}
+
+	mut ready := false
+	for _ in 0 .. 250 {
+		if os.exists(ready_path) {
+			ready = true
+			break
+		}
+		if !server.is_alive() {
+			return error('SMTP TLS test server exited before listening')
+		}
+		time.sleep(20 * time.millisecond)
+	}
+	if !ready {
+		return error('SMTP TLS test server did not become ready')
+	}
+	port := os.read_file(ready_path)!.trim_space().int()
+	mut client_state := 'CONNECTED'
+	mut client := new_client(Config{
+		server:   hostname
+		port:     port
+		username: 'smtp-test-user'
+		password: 'smtp-test-password'
+		ssl:      !starttls
+		starttls: starttls
+		verify:   verify
+		timeout:  5 * time.second
+	}) or {
+		client_state = 'REJECTED'
+		&Client{}
+	}
+	if client_state == 'CONNECTED' {
+		client.quit()!
+	}
+	server.wait()
+	if server.code != 0 {
+		return error('SMTP TLS test server failed with exit code ${server.code}')
+	}
+	server_result := os.read_file(result_path)!.trim_space()
+	return '${client_state}:${server_result}'
+}
+
+fn test_attachment_filename_crlf_cannot_inject_headers() {
+	// a filename containing CRLF must not break out of the
+	// Content-Disposition header: it is stripped, like strip_crlf does
+	// for other header values.
+	// See https://github.com/vlang/v/issues/30174
+	mail := Mail{
+		from:        'sender@example.com'
+		to:          'receiver@example.com'
+		subject:     'CRLF test'
+		body:        'message body'
+		attachments: [
+			Attachment{
+				filename: 'x"\r\nBcc: victim@example.com\r\nX'
+				bytes:    'data'.bytes()
+			},
+		]
+	}
+	message := mail.message_data()
+	assert !message.contains('\r\nBcc: victim@example.com\r\n')
+	assert message.contains('filename="x\\"Bcc: victim@example.comX"')
+}
+
+fn test_attachment_cid_and_filename_strip_single_newline_bytes() {
+	attachment := Attachment{
+		cid:      'image\r\nX-Test: injected\r\n\r\nend'
+		filename: 'a\\b"; name="other\r\n.txt'
+		bytes:    'data'.bytes()
+	}
+	data := attachment.to_string()
+	assert data.contains('Content-ID: <imageX-Test: injectedend>\r\n')
+	assert !data.contains('\r\nX-Test:')
+	assert data.contains('filename="a\\\\b\\"; name=\\"other.txt"\r\n')
+	assert data.ends_with('ZGF0YQ==')
+	for newline in ['\r', '\n'] {
+		clean := Attachment{ filename: 'a${newline}b', cid: 'c${newline}d' }.to_string()
+		assert clean.contains('filename="ab"\r\n')
+		assert clean.contains('Content-ID: <cd>\r\n')
+	}
+}
+
+fn test_attachment_clean_values_preserve_headers_and_payload() {
+	data := Attachment{
+		filename: 'report.txt'
+		cid:      'report@example.com'
+		bytes:    [
+			u8(0),
+			1,
+			255,
+		]
+	}.to_string()
+	assert data.contains('Content-ID: <report@example.com>\r\n')
+	assert data.contains('Content-Disposition: attachment; filename="report.txt"\r\n')
+	assert data.ends_with('AAH/')
+}

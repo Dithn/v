@@ -2,97 +2,21 @@ module main
 
 import os
 import net.urllib
+import encoding.html
 import strings
 import markdown
-import regex
-import v.scanner
-import v.ast
-import v.token
-import v.doc
-import v.pref
+import document as doc
 
-const (
-	css_js_assets = ['doc.css', 'normalize.css', 'doc.js', 'dark-mode.js']
-	res_path      = os.resource_abs_path('resources')
-	favicons_path = os.join_path(res_path, 'favicons')
-	link_svg      = '<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24"><path d="M0 0h24v24H0z" fill="none"/><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>'
-	html_content  = '<!DOCTYPE html>
-<html lang="en">
-	<head>
-		<meta charset="UTF-8">
-		<meta http-equiv="x-ua-compatible" content="IE=edge" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0">
-		<title>{{ title }} | vdoc</title>
-		<link rel="preconnect" href="https://fonts.gstatic.com">
-		<link href="https://fonts.googleapis.com/css2?family=Roboto:wght@400;500;700&display=swap" rel="stylesheet">
-		<link href="https://fonts.googleapis.com/css2?family=Work+Sans:wght@400;500;600&display=swap" rel="stylesheet">
-		<link rel="apple-touch-icon" sizes="180x180" href="apple-touch-icon.png">
-		<link rel="icon" type="image/png" sizes="32x32" href="favicon-32x32.png">
-		<link rel="icon" type="image/png" sizes="16x16" href="favicon-16x16.png">
-		<link rel="manifest" href="site.webmanifest">
-		<link rel="mask-icon" href="safari-pinned-tab.svg" color="#5bbad5">
-		<meta name="msapplication-TileColor" content="#da532c">
-		<meta name="theme-color" content="#ffffff">
-		{{ head_assets }}
-	</head>
-	<body>
-		<div id="page">
-			<header class="doc-nav hidden">
-				<div class="heading-container">
-					<div class="heading">
-						<div class="info">
-							<div class="module">{{ head_name }}</div>
-							<div class="toggle-version-container">
-								<span>{{ version }}</span>
-								<div id="dark-mode-toggle" role="switch" aria-checked="false" aria-label="Toggle dark mode">{{ light_icon }}{{ dark_icon }}</div>
-							</div>
-							{{ menu_icon }}
-						</div>
-						<input type="text" id="search" placeholder="Search... (beta)" autocomplete="off">
-					</div>
-				</div>
-				<nav class="search hidden"></nav>
-				<nav class="content hidden">
-					<ul>
-						{{ toc_links }}
-					</ul>
-				</nav>
-			</header>
-			<div class="doc-scrollview">
-				<div class="doc-container">
-					<div class="doc-content">
-{{ contents }}
-						<div class="footer">
-							{{ footer_content }}
-						</div>
-					</div>
-					{{ right_content }}
-				</div>
-			</div>
-		</div>
-		{{ footer_assets }}
-		<script async src="search_index.js" type="text/javascript"></script>
-	</body>
-</html>'
-)
+const css_js_assets = ['doc.css', 'normalize.css', 'doc.js', 'dark-mode.js']
+const default_theme = os.join_path(@VEXEROOT, 'cmd', 'tools', 'vdoc', 'theme')
+const link_svg = '<svg xmlns="http://www.w3.org/2000/svg" height="24" viewBox="0 0 24 24" width="24"><path d="M0 0h24v24H0z" fill="none"/><path d="M3.9 12c0-1.71 1.39-3.1 3.1-3.1h4V7H7c-2.76 0-5 2.24-5 5s2.24 5 5 5h4v-1.9H7c-1.71 0-3.1-1.39-3.1-3.1zM8 13h8v-2H8v2zm9-6h-4v1.9h4c1.71 0 3.1 1.39 3.1 3.1s-1.39 3.1-3.1 3.1h-4V17h4c2.76 0 5-2.24 5-5s-2.24-5-5-5z"/></svg>'
 
-enum HighlightTokenTyp {
-	unone
-	boolean
-	builtin
-	char
-	comment
-	function
-	keyword
-	name
-	number
-	operator
-	punctuation
-	string
-	symbol
-	none_
-	module_
-	prefix
+const single_quote = "'"
+const double_quote = '"'
+const quote_escape_seq = [single_quote, '', double_quote, '']
+
+fn tabs(n int) string {
+	return '\t'.repeat(n)
 }
 
 struct SearchModuleResult {
@@ -107,30 +31,34 @@ struct SearchResult {
 	link        string
 }
 
-fn (vd VDoc) render_search_index(out Output) {
+fn (vd &VDoc) render_search_index(out Output) {
 	mut js_search_index := strings.new_builder(200)
 	mut js_search_data := strings.new_builder(200)
-	js_search_index.write_string('var searchModuleIndex = [')
-	js_search_data.write_string('var searchModuleData = [')
+	js_search_index.write_string('var searchModuleIndex = [\n')
+	js_search_data.write_string('var searchModuleData = [\n')
 	for i, title in vd.search_module_index {
 		data := vd.search_module_data[i]
-		js_search_index.write_string('"$title",')
-		js_search_data.write_string('["$data.description","$data.link"],')
+		js_search_index.write_string('"${title}",\n')
+		description :=
+			data.description.replace('\n', '').replace('\r', '') // fix multiline js string bug
+		js_search_data.write_string('["${description}","${data.link}"],\n')
 	}
-	js_search_index.writeln('];')
-	js_search_index.write_string('var searchIndex = [')
-	js_search_data.writeln('];')
-	js_search_data.write_string('var searchData = [')
+	js_search_index.writeln('];\n')
+	js_search_index.write_string('var searchIndex = [\n')
+	js_search_data.writeln('];\n')
+	js_search_data.write_string('var searchData = [\n')
 	for i, title in vd.search_index {
 		data := vd.search_data[i]
-		js_search_index.write_string('"$title",')
+		js_search_index.write_string('"${title}",\n')
 		// array instead of object to reduce file size
-		js_search_data.write_string('["$data.badge","$data.description","$data.link","$data.prefix"],')
+		js_search_data.write_string('["${data.badge}","${data.description}","${data.link}","${data.prefix}"],\n')
 	}
-	js_search_index.writeln('];')
-	js_search_data.writeln('];')
+	js_search_index.writeln('];\n')
+	js_search_data.writeln('];\n')
+	final := js_search_index.str() + js_search_data.str()
 	out_file_path := os.join_path(out.path, 'search_index.js')
-	os.write_file(out_file_path, js_search_index.str() + js_search_data.str()) or { panic(err) }
+	println('Generating search_index.js of ${final.len:8} bytes in `${out_file_path} ...')
+	os.write_file(out_file_path, final) or { panic(err) }
 }
 
 fn (mut vd VDoc) render_static_html(out Output) {
@@ -146,10 +74,10 @@ fn (mut vd VDoc) render_static_html(out Output) {
 	}
 }
 
-fn (vd VDoc) get_resource(name string, out Output) string {
+fn (vd &VDoc) get_resource(name string, out Output) string {
 	cfg := vd.cfg
-	path := os.join_path(res_path, name)
-	mut res := os.read_file(path) or { panic('vdoc: could not read $path') }
+	path := os.join_path(cfg.theme_dir, name)
+	mut res := os.read_file(path) or { panic('vdoc: could not read ${path}') }
 	/*
 	if minify {
 		if name.ends_with('.js') {
@@ -165,7 +93,7 @@ fn (vd VDoc) get_resource(name string, out Output) string {
 	} else {
 		output_path := os.join_path(out.path, name)
 		if !os.exists(output_path) {
-			println('Generating $out.typ in "$output_path"')
+			println('Copying ${res.len:8} bytes from `${path}` to `${output_path}` ...')
 			os.write_file(output_path, res) or { panic(err) }
 		}
 		return name
@@ -183,8 +111,8 @@ fn (mut vd VDoc) collect_search_index(out Output) {
 			doc.head.merge_comments_without_examples()
 		}
 		vd.search_module_data << SearchModuleResult{
-			description: trim_doc_node_description(comments)
-			link: vd.get_file_name(mod, out)
+			description: trim_doc_node_description(mod, comments)
+			link:        vd.get_file_name(mod, out)
 		}
 		for _, dn in doc.contents {
 			vd.create_search_results(mod, dn, out)
@@ -202,289 +130,439 @@ fn (mut vd VDoc) create_search_results(mod string, dn doc.DocNode, out Output) {
 	} else {
 		dn.merge_comments_without_examples()
 	}
-	dn_description := trim_doc_node_description(comments)
+	dn_description := trim_doc_node_description(dn.name, comments)
 	vd.search_index << dn.name
 	vd.search_data << SearchResult{
-		prefix: if dn.parent_name != '' { '$dn.kind ($dn.parent_name)' } else { '$dn.kind ' }
+		prefix:      if dn.parent_name != '' {
+			'${dn.kind} (${dn.parent_name})'
+		} else {
+			'${dn.kind} '
+		}
 		description: dn_description
-		badge: mod
-		link: vd.get_file_name(mod, out) + '#' + get_node_id(dn)
+		badge:       mod
+		link:        vd.get_file_name(mod, out) + '#' + get_node_id(dn)
 	}
 	for child in dn.children {
 		vd.create_search_results(mod, child, out)
 	}
 }
 
-fn (vd VDoc) write_content(cn &doc.DocNode, d &doc.Doc, mut hw strings.Builder) {
-	cfg := vd.cfg
-	base_dir := os.dir(os.real_path(cfg.input_path))
-	file_path_name := if cfg.is_multi {
-		cn.file_path.replace('$base_dir/', '')
-	} else {
-		os.file_name(cn.file_path)
+fn (vd &VDoc) get_repo_file_path_for_links(file_path string) string {
+	if file_path == '' {
+		return ''
 	}
-	src_link := get_src_link(vd.manifest.repo_url, file_path_name, cn.pos.line_nr + 1)
-	if cn.content.len != 0 || (cn.name == 'Constants') {
-		hw.write_string(doc_node_html(cn, src_link, false, cfg.include_examples, d.table))
+	input_path := os.real_path(vd.cfg.input_path)
+	input_dir := if os.is_dir(input_path) { input_path } else { os.dir(input_path) }
+	base_dir := vd.repo_root_for_links(input_dir)
+	real_file := os.real_path(file_path)
+	prefix := base_dir.trim_right(os.path_separator) + os.path_separator
+	if real_file.starts_with(prefix) {
+		return real_file[prefix.len..].replace('\\', '/')
+	}
+	return file_path.replace('\\', '/')
+}
+
+fn (vd &VDoc) repo_root_for_links(input_dir string) string {
+	mut ancestor := input_dir
+	mut manifest_root := ''
+	for {
+		// A module's manifest takes precedence over an unrelated enclosing checkout.
+		if os.is_file(os.join_path(ancestor, 'v.mod')) {
+			manifest_root = ancestor
+			break
+		}
+		// Worktrees have a .git file instead of a directory.
+		if os.exists(os.join_path(ancestor, '.git')) {
+			return ancestor
+		}
+		parent := os.dir(ancestor)
+		if parent == ancestor {
+			break
+		}
+		ancestor = parent
+	}
+	mut root := if manifest_root != '' {
+		manifest_root
+	} else if vd.cfg.is_multi {
+		os.dir(os.real_path(vd.cfg.input_path))
+	} else {
+		input_dir
+	}
+	if manifest_root != '' {
+		// Include every declared source directory without relying on enclosing Git metadata.
+		for source_dir in doc.module_source_dirs(module_source_root(manifest_root)) {
+			root = common_ancestor(root, os.real_path(source_dir) + os.path_separator)
+		}
+	}
+	return root
+}
+
+fn (vd &VDoc) write_content(cn &doc.DocNode, mut hw strings.Builder) {
+	cfg := vd.cfg
+	file_path_name := vd.get_repo_file_path_for_links(cn.file_path)
+	src_link := get_src_link(vd.manifest.repo_url, vd.manifest.repo_branch, file_path_name, cn.pos.line_nr + 1)
+	md_link_base := get_src_dir_link(vd.manifest.repo_url, vd.manifest.repo_branch, file_path_name)
+	if cn.content.len != 0 || cn.name == 'Constants' {
+		hw.write_string(vd.doc_node_html(cn, src_link, md_link_base, false, cfg.include_examples))
+		hw.write_string('\n')
 	}
 	for child in cn.children {
-		child_file_path_name := child.file_path.replace('$base_dir/', '')
-		child_src_link := get_src_link(vd.manifest.repo_url, child_file_path_name,
-			child.pos.line_nr + 1)
-		hw.write_string(doc_node_html(child, child_src_link, false, cfg.include_examples,
-			d.table))
+		child_file_path_name := vd.get_repo_file_path_for_links(child.file_path)
+		child_src_link := get_src_link(vd.manifest.repo_url, vd.manifest.repo_branch, child_file_path_name, child.pos.line_nr + 1)
+		child_md_link_base := get_src_dir_link(vd.manifest.repo_url, vd.manifest.repo_branch, child_file_path_name)
+		hw.write_string(vd.doc_node_html(child, child_src_link, child_md_link_base, false, cfg.include_examples))
+		hw.write_string('\n')
 	}
 }
 
-fn (vd VDoc) gen_html(d doc.Doc) string {
+fn (vd &VDoc) gen_html(d doc.Doc) string {
 	cfg := vd.cfg
 	mut symbols_toc := strings.new_builder(200)
-	mut modules_toc := strings.new_builder(200)
 	mut contents := strings.new_builder(200)
 	dcs_contents := d.contents.arr()
 	// generate toc first
-	contents.writeln(doc_node_html(d.head, '', true, cfg.include_examples, d.table))
+	head_md_link_base := if is_module_readme(d.head) {
+		readme_file_path := vd.get_repo_file_path_for_links(d.head.file_path)
+		get_src_dir_link(vd.manifest.repo_url, vd.manifest.repo_branch, readme_file_path)
+	} else {
+		''
+	}
+	contents.writeln(vd.doc_node_html(d.head, '', head_md_link_base, true, cfg.include_examples))
 	if is_module_readme(d.head) {
 		write_toc(d.head, mut symbols_toc)
 	}
 	for cn in dcs_contents {
-		vd.write_content(&cn, &d, mut contents)
-		write_toc(cn, mut symbols_toc)
-	} // write head
+		vd.write_content(&cn, mut contents)
+		write_toc(cn, mut symbols_toc) // write head
+	}
+	if cfg.html_only_contents {
+		// no need for theming, styling etc, useful for testing and for external documentation generators
+		return contents.str()
+	}
+
 	// write css
-	version := if vd.manifest.version.len != 0 { vd.manifest.version } else { '' }
 	header_name := if cfg.is_multi && vd.docs.len > 1 {
 		os.file_name(os.real_path(cfg.input_path))
 	} else {
 		d.head.name
 	}
-	// write nav1
-	if cfg.is_multi || vd.docs.len > 1 {
-		mut submod_prefix := ''
-		for i, dc in vd.docs {
-			if i - 1 >= 0 && dc.head.name.starts_with(submod_prefix + '.') {
-				continue
-			}
-			names := dc.head.name.split('.')
-			submod_prefix = if names.len > 1 { names[0] } else { dc.head.name }
-			mut href_name := './${dc.head.name}.html'
-			if (cfg.is_vlib && dc.head.name == 'builtin' && !cfg.include_readme)
-				|| dc.head.name == 'README' {
-				href_name = './index.html'
-			} else if submod_prefix !in vd.docs.map(it.head.name) {
-				href_name = '#'
-			}
-			submodules := vd.docs.filter(it.head.name.starts_with(submod_prefix + '.'))
-			dropdown := if submodules.len > 0 { vd.assets['arrow_icon'] } else { '' }
-			active_class := if dc.head.name == d.head.name { ' active' } else { '' }
-			modules_toc.write_string('<li class="open$active_class"><div class="menu-row">$dropdown<a href="$href_name">$submod_prefix</a></div>')
-			for j, cdoc in submodules {
-				if j == 0 {
-					modules_toc.write_string('<ul>')
-				}
-				submod_name := cdoc.head.name.all_after(submod_prefix + '.')
-				sub_selected_classes := if cdoc.head.name == d.head.name {
-					' class="active"'
-				} else {
-					''
-				}
-				modules_toc.write_string('<li$sub_selected_classes><a href="./${cdoc.head.name}.html">$submod_name</a></li>')
-				if j == submodules.len - 1 {
-					modules_toc.write_string('</ul>')
-				}
-			}
-			modules_toc.write_string('</li>')
-		}
-	}
-	modules_toc_str := modules_toc.str()
-	symbols_toc_str := symbols_toc.str()
-	result := html_content.replace('{{ title }}', d.head.name).replace('{{ head_name }}',
-		header_name).replace('{{ version }}', version).replace('{{ light_icon }}', vd.assets['light_icon']).replace('{{ dark_icon }}',
-		vd.assets['dark_icon']).replace('{{ menu_icon }}', vd.assets['menu_icon']).replace('{{ head_assets }}',
-		if cfg.inline_assets {
-		'\n${tabs[0]}<style>' + vd.assets['doc_css'] + '</style>\n${tabs[0]}<style>' +
-			vd.assets['normalize_css'] + '</style>\n${tabs[0]}<script>' +
-			vd.assets['dark_mode_js'] + '</script>'
-	} else {
-		'\n${tabs[0]}<link rel="stylesheet" href="' + vd.assets['doc_css'] +
-			'" />\n${tabs[0]}<link rel="stylesheet" href="' + vd.assets['normalize_css'] +
-			'" />\n${tabs[0]}<script src="' + vd.assets['dark_mode_js'] + '"></script>'
-	}).replace('{{ toc_links }}', if cfg.is_multi || vd.docs.len > 1 {
-		modules_toc_str
-	} else {
-		symbols_toc_str
-	}).replace('{{ contents }}', contents.str()).replace('{{ right_content }}', if cfg.is_multi
-		&& vd.docs.len > 1 && d.head.name != 'README' {
-		'<div class="doc-toc"><ul>' + symbols_toc_str + '</ul></div>'
+	modules_toc_str := if cfg.is_multi || vd.docs.len > 1 {
+		vd.gen_modules_toc(d.head.name)
 	} else {
 		''
-	}).replace('{{ footer_content }}', gen_footer_text(d, !cfg.no_timestamp)).replace('{{ footer_assets }}',
-		if cfg.inline_assets {
-		'<script>' + vd.assets['doc_js'] + '</script>'
+	}
+	symbols_toc_str := symbols_toc.str()
+	mut result := os.read_file(os.join_path(cfg.theme_dir, 'index.html')) or { panic(err) }
+	if cfg.html_no_vhash {
+		result = result.replace('{{ version }}', 'latest')
 	} else {
-		'<script src="' + vd.assets['doc_js'] + '"></script>'
-	})
+		mut version := if vd.manifest.version.len != 0 { vd.manifest.version } else { '' }
+		version = [version, @VCURRENTHASH].join(' ')
+		result = result.replace('{{ version }}', version)
+	}
+	result = result.replace('{{ title }}', d.head.name)
+	result = result.replace('{{ head_name }}', header_name)
+	result = result.replace('{{ light_icon }}', vd.assets['light_icon'])
+	result = result.replace('{{ dark_icon }}', vd.assets['dark_icon'])
+	result = result.replace('{{ menu_icon }}', vd.assets['menu_icon'])
+	if cfg.html_no_assets {
+		result = result.replace('{{ head_assets }}', '')
+	} else {
+		result = result.replace('{{ head_assets }}', if cfg.inline_assets {
+			'<style>${vd.assets['doc_css']}</style>
+${tabs(2)}<style>${vd.assets['normalize_css']}</style>
+${tabs(2)}<script>${vd.assets['dark_mode_js']}</script>'
+		} else {
+			'<link rel="stylesheet" href="${vd.assets['doc_css']}" />
+${tabs(2)}<link rel="stylesheet" href="${vd.assets['normalize_css']}" />
+${tabs(2)}<script src="${vd.assets['dark_mode_js']}"></script>'
+		})
+	}
+	if cfg.html_no_toc_urls {
+		result = result.replace('{{ toc_links }}', '')
+	} else {
+		result = result.replace('{{ toc_links }}', if cfg.is_multi || vd.docs.len > 1 {
+			modules_toc_str
+		} else {
+			symbols_toc_str
+		})
+	}
+	result = result.replace('{{ contents }}', contents.str())
+	if cfg.html_no_right {
+		result = result.replace('{{ right_content }}', '')
+	} else {
+		result = result.replace('{{ right_content }}', if cfg.is_multi && d.head.name != 'README' {
+			'<div class="doc-toc"><ul>${symbols_toc_str}</ul></div>'
+		} else {
+			''
+		})
+	}
+	if cfg.html_no_footer {
+		result = result.replace('{{ footer_content }}', '')
+	} else {
+		result = result.replace('{{ footer_content }}', gen_footer_text(d, !cfg.no_timestamp))
+	}
+	if cfg.html_no_assets {
+		result = result.replace('{{ footer_assets }}', '')
+	} else {
+		result = result.replace('{{ footer_assets }}', if cfg.inline_assets {
+			'<script>${vd.assets['doc_js']}</script>'
+		} else {
+			'<script src="${vd.assets['doc_js']}"></script>'
+		})
+	}
 	return result
 }
 
-fn get_src_link(repo_url string, file_name string, line_nr int) string {
+fn (vd &VDoc) gen_modules_toc(active_doc string) string {
+	mut modules_toc := strings.new_builder(200)
+	mut used_submod_prefixes := map[string]bool{}
+	doc_names := vd.docs.map(it.head.name)
+	for dc in vd.docs {
+		mut submod_prefix := dc.head.name.all_before('.')
+		if index := dc.head.frontmatter['index'] {
+			if dc.head.name == 'index' {
+				submod_prefix = index
+			}
+		}
+		if used_submod_prefixes[submod_prefix] {
+			continue
+		}
+		used_submod_prefixes[submod_prefix] = true
+		mut href_name := ''
+		if dc.head.name in ['README', 'index'] {
+			href_name = './index.html'
+		} else if submod_prefix in doc_names {
+			href_name = './${submod_prefix}.html'
+		}
+		submodules := vd.docs.filter(it.head.name.starts_with(submod_prefix + '.'))
+		dropdown := if submodules.len > 0 { vd.assets['arrow_icon'] } else { '' }
+		active_class := if dc.head.name == active_doc { ' active' } else { '' }
+		menu_item := if href_name != '' {
+			'<a href="${href_name}">${submod_prefix}</a>'
+		} else {
+			'<a>${submod_prefix}</a>'
+		}
+		modules_toc.write_string('<li class="open${active_class}">\n<div class="menu-row">${dropdown}${menu_item}</div>\n')
+		for j, cdoc in submodules {
+			if j == 0 {
+				modules_toc.write_string('<ul>\n')
+			}
+			submod_name := cdoc.head.name.all_after(submod_prefix + '.')
+			sub_selected_classes := if cdoc.head.name == active_doc {
+				' class="active"'
+			} else {
+				''
+			}
+			modules_toc.write_string('<li${sub_selected_classes}><a href="./${cdoc.head.name}.html">${submod_name}</a></li>\n')
+			if j == submodules.len - 1 {
+				modules_toc.write_string('</ul>\n')
+			}
+		}
+		modules_toc.write_string('</li>\n')
+	}
+	return modules_toc.str()
+}
+
+fn get_repo_file_link(repo_url string, repo_branch string, file_name string) string {
 	mut url := urllib.parse(repo_url) or { return '' }
-	if url.path.len <= 1 || file_name.len == 0 {
+	if url.path.len <= 1 || file_name == '' {
 		return ''
 	}
 	url.path = url.path.trim_right('/') + match url.host {
-		'github.com' { '/blob/master/$file_name' }
-		'gitlab.com' { '/-/blob/master/$file_name' }
-		'git.sir.ht' { '/tree/master/$file_name' }
+		'github.com' { '/blob/${repo_branch}/${file_name}' }
+		'gitlab.com' { '/-/blob/${repo_branch}/${file_name}' }
+		'git.sir.ht' { '/tree/${repo_branch}/${file_name}' }
 		else { '' }
 	}
+
 	if url.path == '/' {
 		return ''
 	}
-	url.fragment = 'L$line_nr'
 	return url.str()
 }
 
-fn html_highlight(code string, tb &ast.Table) string {
-	builtin := ['bool', 'string', 'i8', 'i16', 'int', 'i64', 'i128', 'byte', 'u16', 'u32', 'u64',
-		'u128', 'rune', 'f32', 'f64', 'int_literal', 'float_literal', 'byteptr', 'voidptr', 'any']
-	highlight_code := fn (tok token.Token, typ HighlightTokenTyp) string {
-		lit := if typ in [.unone, .operator, .punctuation] {
-			tok.kind.str()
-		} else if typ == .string {
-			"'$tok.lit'"
-		} else if typ == .char {
-			'`$tok.lit`'
-		} else {
-			tok.lit
-		}
-		if typ in [.unone, .name] {
-			return lit
-		}
-		return '<span class="token $typ">$lit</span>'
+fn get_src_dir_link(repo_url string, repo_branch string, file_name string) string {
+	file_url := get_repo_file_link(repo_url, repo_branch, file_name)
+	if file_url == '' {
+		return ''
 	}
-	mut s := scanner.new_scanner(code, .parse_comments, &pref.Preferences{})
-	mut tok := s.scan()
-	mut next_tok := s.scan()
-	mut buf := strings.new_builder(200)
-	mut i := 0
-	for i < code.len {
-		if i == tok.pos {
-			mut tok_typ := HighlightTokenTyp.unone
-			match tok.kind {
-				.name {
-					if tok.lit in builtin || tb.known_type(tok.lit) {
-						tok_typ = .builtin
-					} else if next_tok.kind == .lcbr {
-						tok_typ = .symbol
-					} else if next_tok.kind == .lpar {
-						tok_typ = .function
-					} else {
-						tok_typ = .name
-					}
-				}
-				.comment {
-					tok_typ = .comment
-				}
-				.chartoken {
-					tok_typ = .char
-				}
-				.string {
-					tok_typ = .string
-				}
-				.number {
-					tok_typ = .number
-				}
-				.key_true, .key_false {
-					tok_typ = .boolean
-				}
-				.lpar, .lcbr, .rpar, .rcbr, .lsbr, .rsbr, .semicolon, .colon, .comma, .dot {
-					tok_typ = .punctuation
-				}
-				else {
-					if token.is_key(tok.lit) || token.is_decl(tok.kind) {
-						tok_typ = .keyword
-					} else if tok.kind == .decl_assign || tok.kind.is_assign() || tok.is_unary()
-						|| tok.kind.is_relational() || tok.kind.is_infix() {
-						tok_typ = .operator
-					}
-				}
-			}
-			buf.write_string(highlight_code(tok, tok_typ))
-			if next_tok.kind != .eof {
-				i = tok.pos + tok.len
-				tok = next_tok
-				next_tok = s.scan()
-			} else {
-				break
-			}
-		} else {
-			buf.write_b(code[i])
-			i++
-		}
+	mut parsed_file_url := urllib.parse(file_url) or { return '' }
+	mut dir_path := parsed_file_url.path.all_before_last('/')
+	if dir_path == '' {
+		dir_path = '/'
 	}
-	return buf.str()
+	parsed_file_url.path = if dir_path == '/' { '/' } else { dir_path + '/' }
+	parsed_file_url.raw_query = ''
+	parsed_file_url.fragment = ''
+	return parsed_file_url.str()
 }
 
-fn doc_node_html(dn doc.DocNode, link string, head bool, include_examples bool, tb &ast.Table) string {
+fn get_src_link(repo_url string, repo_branch string, file_name string, line_nr int) string {
+	file_url := get_repo_file_link(repo_url, repo_branch, file_name)
+	if file_url == '' {
+		return ''
+	}
+	mut parsed_file_url := urllib.parse(file_url) or { return '' }
+	parsed_file_url.fragment = 'L${line_nr}'
+	return parsed_file_url.str()
+}
+
+fn normalize_url_path(path string) string {
+	if path == '' {
+		return ''
+	}
+	is_absolute := path.starts_with('/')
+	mut parts := []string{}
+	for part in path.split('/') {
+		match part {
+			'', '.' {}
+			'..' {
+				if parts.len > 0 {
+					parts.delete_last()
+				}
+			}
+			else {
+				parts << part
+			}
+		}
+	}
+	mut normalized := parts.join('/')
+	if is_absolute {
+		normalized = '/' + normalized
+	}
+	return if normalized == '' && is_absolute { '/' } else { normalized }
+}
+
+fn is_relative_markdown_link(link string) bool {
+	value := link.trim_space()
+	if value == '' || value.starts_with('#') || value.starts_with('//') {
+		return false
+	}
+	if value.starts_with('/') {
+		return false
+	}
+	if url := urllib.parse(value) {
+		return url.scheme == '' && url.host == ''
+	}
+	return true
+}
+
+fn resolve_relative_markdown_link(base_url string, link string) string {
+	if base_url == '' || !is_relative_markdown_link(link) {
+		return link
+	}
+	mut parsed_base := urllib.parse(base_url) or { return link }
+	mut relative_path := link
+	mut fragment := ''
+	if hash_idx := relative_path.index('#') {
+		fragment = relative_path[hash_idx + 1..]
+		relative_path = relative_path[..hash_idx]
+	}
+	mut query := ''
+	if query_idx := relative_path.index('?') {
+		query = relative_path[query_idx + 1..]
+		relative_path = relative_path[..query_idx]
+	}
+	base_path := if parsed_base.path.ends_with('/') {
+		parsed_base.path
+	} else {
+		parsed_base.path.all_before_last('/') + '/'
+	}
+	parsed_base.path = normalize_url_path(base_path + relative_path)
+	parsed_base.raw_query = query
+	parsed_base.fragment = fragment
+	return parsed_base.str()
+}
+
+fn html_highlight(code string) string {
+	mut buf := strings.new_builder(code.len + 64)
+	mut offset := 0
+	for highlighted in highlight_tokens(code) {
+		if highlighted.start > offset {
+			buf.write_string(escape_code(code[offset..highlighted.start]))
+		}
+		raw := code[highlighted.start..highlighted.end]
+		if highlighted.typ == .name {
+			buf.write_string(escape_code(raw))
+		} else {
+			buf.write_string('<span class="token ${highlighted.typ}">${escape_code(raw)}</span>')
+		}
+		offset = highlighted.end
+	}
+	if offset < code.len {
+		buf.write_string(escape_code(code[offset..]))
+	}
+	return buf.str().trim_string_right('\n')
+}
+
+fn escape_code(text string) string {
+	return text.replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;')
+}
+
+fn (vd &VDoc) doc_node_html(dn doc.DocNode, link string, md_link_base string, head bool, include_examples bool) string {
 	mut dnw := strings.new_builder(200)
 	head_tag := if head { 'h1' } else { 'h2' }
-	comments := dn.merge_comments_without_examples()
-	// Allow README.md to go through unescaped except for script tags
-	escaped_html := if head && is_module_readme(dn) {
-		// Strip markdown [TOC] directives, since we generate our own.
-		stripped := comments.replace('[TOC]', '')
-		markdown_escape_script_tags(stripped)
-	} else {
-		html_tag_escape(comments)
+	mut renderer := markdown.HtmlRenderer{
+		transformer: &MdHtmlCodeHighlighter{
+			relative_link_base: md_link_base
+		}
 	}
-	md_content := markdown.to_html(escaped_html)
-	highlighted_code := html_highlight(dn.content, tb)
+	only_comments_text := dn.merge_comments_without_examples()
+	md_content := markdown.render(prepare_markdown_for_html(only_comments_text), mut renderer) or {
+		''
+	}
+	highlighted_code := html_highlight(dn.content)
 	node_class := if dn.kind == .const_group { ' const' } else { '' }
 	sym_name := get_sym_name(dn)
-	has_deprecated := 'deprecated' in dn.tags
-	mut tags := dn.tags.filter(it != 'deprecated')
-	tags.sort()
+	mut deprecated_tags := dn.tags.filter(it.starts_with('deprecated'))
+	if doc.should_sort {
+		deprecated_tags.sort()
+	}
+	mut tags := dn.tags.filter(!it.starts_with('deprecated'))
+	if doc.should_sort {
+		tags.sort()
+	}
 	mut node_id := get_node_id(dn)
-	mut hash_link := if !head { ' <a href="#$node_id">#</a>' } else { '' }
+	mut hash_link := if !head { ' <a href="#${node_id}">#</a>' } else { '' }
 	if head && is_module_readme(dn) {
-		node_id = 'readme_$node_id'
-		hash_link = ' <a href="#$node_id">#</a>'
+		node_id = 'readme_${node_id}'
+		hash_link = ' <a href="#${node_id}">#</a>'
 	}
-	dnw.writeln('${tabs[1]}<section id="$node_id" class="doc-node$node_class">')
-	if dn.name.len > 0 {
+	dnw.writeln('${tabs(2)}<section id="${node_id}" class="doc-node${node_class}">')
+	if dn.name != '' {
 		if dn.kind == .const_group {
-			dnw.write_string('${tabs[2]}<div class="title"><$head_tag>$sym_name$hash_link</$head_tag>')
+			dnw.write_string('${tabs(3)}<div class="title"><${head_tag}>${sym_name}${hash_link}</${head_tag}>')
 		} else {
-			dnw.write_string('${tabs[2]}<div class="title"><$head_tag>$dn.kind $sym_name$hash_link</$head_tag>')
+			dnw.write_string('${tabs(3)}<div class="title"><${head_tag}>${dn.kind} ${sym_name}${hash_link}</${head_tag}>')
 		}
-		if link.len != 0 {
-			dnw.write_string('<a class="link" rel="noreferrer" target="_blank" href="$link">$link_svg</a>')
+		if link != '' {
+			dnw.write_string('<a class="link" rel="noreferrer" target="_blank" href="${link}">${link_svg}</a>')
 		}
-		dnw.write_string('</div>')
+		dnw.write_string('</div>\n')
 	}
-	if tags.len > 0 || has_deprecated {
-		mut attributes := if has_deprecated {
-			'<div class="attribute attribute-deprecated">deprecated</div>'
-		} else {
-			''
-		}
-		attributes += tags.map('<div class="attribute">$it</div>').join('')
-		dnw.writeln('<div class="attributes">$attributes</div>')
+	if deprecated_tags.len > 0 {
+		attributes :=
+			deprecated_tags.map('<div class="attribute attribute-deprecated">${it.replace_each(quote_escape_seq)}</div>\n').join('')
+		dnw.writeln('<div class="attributes">${attributes}</div>\n')
+	}
+	if tags.len > 0 {
+		attributes := tags.map('<div class="attribute">${it}</div>').join('')
+		dnw.writeln('<div class="attributes">${attributes}</div>')
 	}
 	if !head && dn.content.len > 0 {
-		dnw.writeln('<pre class="signature"><code>$highlighted_code</code></pre>')
+		dnw.writeln('<pre class="signature">\n<code>${highlighted_code}</code></pre>')
 	}
 	// do not mess with md_content further, its formatting is important, just output it 1:1 !
-	dnw.writeln('$md_content\n')
+	dnw.writeln('${md_content}\n')
 	// Write examples if any found
 	examples := dn.examples()
 	if include_examples && examples.len > 0 {
 		example_title := if examples.len > 1 { 'Examples' } else { 'Example' }
-		dnw.writeln('<section class="doc-node examples"><h4>$example_title</h4>')
+		dnw.writeln('<section class="doc-node examples"><h4>${example_title}</h4>')
 		for example in examples {
-			// hl_example := html_highlight(example, tb)
-			dnw.writeln('<pre><code class="language-v">$example</code></pre>')
+			hl_example := html_highlight(example)
+			dnw.writeln('<pre>\n<code class="language-v">${hl_example}</code></pre>')
 		}
 		dnw.writeln('</section>')
 	}
@@ -493,39 +571,160 @@ fn doc_node_html(dn doc.DocNode, link string, head bool, include_examples bool, 
 	return dnw_str
 }
 
-fn html_tag_escape(str string) string {
-	excaped_string := str.replace_each(['<', '&lt;', '>', '&gt;'])
-	mut re := regex.regex_opt(r'`.+[(&lt;)(&gt;)].+`') or { regex.RE{} }
-	if re.find_all_str(excaped_string).len > 0 {
-		return str
+fn prepare_markdown_for_html(text string) string {
+	if !text.contains('\n') {
+		return text
 	}
-	return excaped_string
-}
-
-/*
-fn js_compress(str string) string {
-	mut js := strings.new_builder(200)
-	lines := str.split_into_lines()
-	rules := [') {', ' = ', ', ', '{ ', ' }', ' (', '; ', ' + ', ' < ', ' - ', ' || ', ' var',
-		': ', ' >= ', ' && ', ' else if', ' === ', ' !== ', ' else ']
-	clean := ['){', '=', ',', '{', '}', '(', ';', '+', '<', '-', '||', 'var', ':', '>=', '&&',
-		'else if', '===', '!==', 'else']
-	for line in lines {
-		mut trimmed := line.trim_space()
-		if trimmed.starts_with('//') || (trimmed.starts_with('/*') && trimmed.ends_with('*/')) {
+	lines := text.split_into_lines()
+	mut prepared := []string{cap: lines.len}
+	mut is_codeblock := false
+	mut prev_line := ''
+	for i, line in lines {
+		trimmed := line.trim_space()
+		if trimmed.starts_with('```') {
+			prepared << line
+			is_codeblock = !is_codeblock
+			prev_line = line
 			continue
 		}
-		for i in 0 .. rules.len - 1 {
-			trimmed = trimmed.replace(rules[i], clean[i])
+		if is_codeblock {
+			prepared << line
+			prev_line = line
+			continue
 		}
-		js.write_string(trimmed)
+		if line_continues_previous_block(prev_line, line) && prepared.len > 0 {
+			prepared[prepared.len - 1] += ' ' + trimmed
+			prev_line = line
+			continue
+		}
+		next_line := if i + 1 < lines.len { lines[i + 1] } else { '' }
+		if blockquote_line_needs_hard_break(line, next_line) {
+			prepared << line + '  '
+		} else {
+			prepared << line
+		}
+		prev_line = line
 	}
-	js_str := js.str()
-	return js_str
+	return prepared.join('\n')
 }
-*/
+
+fn line_continues_previous_block(prev_line string, line string) bool {
+	prev_trimmed := prev_line.trim_space()
+	trimmed := line.trim_space()
+	if prev_trimmed == '' || trimmed == '' {
+		return false
+	}
+	if prev_trimmed.starts_with('>') || trimmed.starts_with('>') {
+		return false
+	}
+	if prev_trimmed.starts_with('```') || trimmed.starts_with('```') {
+		return false
+	}
+	if markdown_line_starts_new_block(line) {
+		return false
+	}
+	if prev_trimmed.starts_with('#') || prev_trimmed.starts_with('|')
+		|| markdown_line_is_horizontal_rule(prev_trimmed) {
+		return false
+	}
+	return true
+}
+
+fn markdown_line_starts_new_block(line string) bool {
+	trimmed := line.trim_space()
+	if trimmed == '' {
+		return false
+	}
+	if trimmed.starts_with('#') || trimmed.starts_with('>') || trimmed.starts_with('|')
+		|| trimmed.starts_with('```') || markdown_line_is_horizontal_rule(trimmed) {
+		return true
+	}
+	if markdown_indent_width(line) >= 4 {
+		return true
+	}
+	return markdown_line_is_list_item(trimmed)
+}
+
+fn markdown_line_is_list_item(line string) bool {
+	if line.len > 1 && line[1] == ` ` && line[0] in [`-`, `*`, `+`] {
+		return true
+	}
+	return line.len > 2 && line[2] == ` ` && line[1] == `.` && line[0].is_digit()
+}
+
+fn markdown_line_is_horizontal_rule(line string) bool {
+	line_no_spaces := line.replace(' ', '')
+	if line_no_spaces.len < 3 {
+		return false
+	}
+	for ch in ['-', '=', '*', '_', '~'] {
+		if line_no_spaces.starts_with(ch.repeat(3))
+			&& line_no_spaces.count(ch) == line_no_spaces.len {
+			return true
+		}
+	}
+	return false
+}
+
+fn markdown_indent_width(line string) int {
+	mut width := 0
+	for ch in line {
+		if ch == ` ` {
+			width++
+			continue
+		}
+		if ch == `\t` {
+			width += 4
+			continue
+		}
+		break
+	}
+	return width
+}
+
+fn blockquote_line_needs_hard_break(line string, next_line string) bool {
+	if line.ends_with('  ') {
+		return false
+	}
+	payload := blockquote_payload(line) or { return false }
+	if payload == '' {
+		return false
+	}
+	next_payload := blockquote_payload(next_line) or { return false }
+	if next_payload == '' {
+		return false
+	}
+	return !blockquote_payload_starts_new_block(next_payload)
+}
+
+fn blockquote_payload(line string) ?string {
+	trimmed := line.trim_space()
+	if !trimmed.starts_with('>') {
+		return none
+	}
+	return trimmed[1..].trim_space()
+}
+
+fn blockquote_payload_starts_new_block(payload string) bool {
+	if payload == '' || payload.starts_with('```') || payload.starts_with('>')
+		|| payload.starts_with('|') {
+		return true
+	}
+	if payload.len > 1 && payload[1] == ` ` && payload[0] in [`-`, `*`, `+`] {
+		return true
+	}
+	if payload.len > 2 && payload[2] == ` ` && payload[1] == `.` && payload[0].is_digit() {
+		return true
+	}
+	if !payload.starts_with('#') {
+		return false
+	}
+	line_before_spaces := payload.before(' ')
+	return line_before_spaces.count('#') == line_before_spaces.len
+}
+
 fn write_toc(dn doc.DocNode, mut toc strings.Builder) {
-	mut toc_slug := if dn.name.len == 0 || dn.content.len == 0 { '' } else { slug(dn.name) }
+	mut toc_slug := if dn.name == '' || dn.content.len == 0 { '' } else { slug(dn.name) }
 	if toc_slug == '' && dn.children.len > 0 {
 		if dn.children[0].name == '' {
 			toc_slug = slug(dn.name)
@@ -537,17 +736,53 @@ fn write_toc(dn doc.DocNode, mut toc strings.Builder) {
 		if dn.comments.len == 0 || (dn.comments.len > 0 && dn.comments[0].text.len == 0) {
 			return
 		}
-		toc.write_string('<li class="open"><a href="#readme_$toc_slug">README</a>')
+		toc.write_string('<li class="open"><a href="#readme_${toc_slug}">README</a>')
 	} else if dn.name != 'Constants' {
-		toc.write_string('<li class="open"><a href="#$toc_slug">$dn.kind $dn.name</a>')
+		toc.write_string('<li class="open"><a href="#${toc_slug}">${dn.kind} ${dn.name}</a>')
 		toc.writeln('        <ul>')
 		for child in dn.children {
 			cname := dn.name + '.' + child.name
-			toc.writeln('<li><a href="#${slug(cname)}">$child.kind $child.name</a></li>')
+			toc.writeln('<li><a href="#${slug(cname)}">${child.kind} ${child.name}</a></li>')
 		}
 		toc.writeln('</ul>')
 	} else {
-		toc.write_string('<li class="open"><a href="#$toc_slug">$dn.name</a>')
+		toc.write_string('<li class="open"><a href="#${toc_slug}">${dn.name}</a>')
 	}
 	toc.writeln('</li>')
+}
+
+struct MdHtmlCodeHighlighter {
+mut:
+	language           string
+	relative_link_base string
+}
+
+fn (f &MdHtmlCodeHighlighter) transform_attribute(p markdown.ParentType, name string, value string) string {
+	mut transformed := value
+	if p is markdown.MD_SPANTYPE && p in [.md_span_a, .md_span_img] && name in ['href', 'src'] {
+		transformed = resolve_relative_markdown_link(f.relative_link_base, value)
+	}
+	return markdown.default_html_transformer.transform_attribute(p, name, transformed)
+}
+
+fn (f &MdHtmlCodeHighlighter) transform_content(parent markdown.ParentType, text string) string {
+	if parent is markdown.MD_BLOCKTYPE && parent == .md_block_code {
+		if f.language == '' {
+			return html.escape(text)
+		}
+		output := html_highlight(text)
+		// Reset the language, so that it will not persist between blocks,
+		// and will not be accidentally re-used for the next block, that may be lacking ```language :
+		unsafe {
+			f.language = ''
+		}
+		return output
+	}
+	return text
+}
+
+fn (mut f MdHtmlCodeHighlighter) config_set(key string, val string) {
+	if key == 'code_language' {
+		f.language = val
+	}
 }

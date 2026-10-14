@@ -2,40 +2,40 @@ import io
 
 struct Buf {
 pub:
-	bytes []byte
+	bytes []u8
 mut:
 	i int
 }
 
 struct Writ {
 pub mut:
-	bytes []byte
+	bytes []u8
 }
 
-fn (mut b Buf) read(mut buf []byte) ?int {
+fn (mut b Buf) read(mut buf []u8) !int {
 	if !(b.i < b.bytes.len) {
-		return none
+		return io.Eof{}
 	}
-	n := copy(buf, b.bytes[b.i..])
+	n := copy(mut buf, b.bytes[b.i..])
 	b.i += n
 	return n
 }
 
-fn (mut w Writ) write(buf []byte) ?int {
+fn (mut w Writ) write(buf []u8) !int {
 	if buf.len <= 0 {
-		return none
+		return error('none')
 	}
 	w.bytes << buf
 	return buf.len
 }
 
 fn test_copy() {
-	src := Buf{
+	mut src := Buf{
 		bytes: 'abcdefghij'.repeat(10).bytes()
 	}
 	mut dst := Writ{
-		bytes: []byte{}
+		bytes: []u8{}
 	}
-	io.cp(src, mut dst) or { assert false }
+	io.cp(mut src, mut dst) or { assert false }
 	assert dst.bytes == src.bytes
 }

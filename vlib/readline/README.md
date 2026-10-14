@@ -1,20 +1,31 @@
-# Readline
+# Description
 
-The `readline` module let you await and read user input
+The `readline` module lets you await and read user input
 from a terminal in an easy and structured manner.
 
 The module provides an easy way to prompt the user for
 questions or even make a REPL or an embedded console.
 
-Use `readline.Readline` if you want to include more
-advanced features such as history or simply use
-`readline.read_line('Please confirm (y/n):')` directly
-for one-off user interactions.
+On Unix, `read_char()` returns a `failed to read character` error when input is unavailable.
 
-# Usage
+Unix line input accepts `ÿ` (U+00FF) as a character. Ctrl+W deletes the word to the left of the
+cursor, including on one-character lines, and has no effect on an empty line.
 
-```v ignore
-import readline { Readline }
+# Usage:
 
-Readline.read_line('Continue?: (y/n)')
+```v
+import readline
+
+mut r := readline.Readline{}
+answer := r.read_line('hello: ')!
+println(answer)
+```
+
+or just:
+
+```v
+import readline { read_line }
+
+input := read_line('What is your name: ')!
+println('Your name is: ${input}')
 ```

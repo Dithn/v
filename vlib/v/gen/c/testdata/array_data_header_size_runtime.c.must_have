@@ -1,0 +1,4 @@
+VV_LOC int builtin__array_data_header_size(void) {
+return 16;
+data - builtin__array_data_header_size();
+base_data - builtin__array_data_header_size()));

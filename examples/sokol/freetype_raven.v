@@ -1,13 +1,11 @@
-import sokol
 import sokol.sapp
 import sokol.gfx
 import sokol.sgl
+import fontstash
 import sokol.sfons
 import os
-import time
 
-const (
-	text = '
+const text = '
 Once upon a midnight dreary, while I pondered, weak and weary,
 Over many a quaint and curious volume of forgotten lore—
     While I nodded, nearly napping, suddenly there came a tapping,
@@ -50,104 +48,92 @@ Soon again I heard a tapping somewhat louder than before.
 Let my heart be still a moment and this mystery explore;—
             ’Tis the wind and nothing more!”
 '
-	lines = text.split('\n')
-)
+
+const lines = text.split('\n')
 
 struct AppState {
 mut:
-	pass_action C.sg_pass_action
-	fons        &C.FONScontext
+	pass_action gfx.PassAction
+	fons        &fontstash.Context = unsafe { nil }
 	font_normal int
 	inited      bool
 }
 
 fn main() {
-	mut color_action := C.sg_color_attachment_action{
-		action: gfx.Action(C.SG_ACTION_CLEAR)
-		value: C.sg_color{
+	mut color_action := gfx.ColorAttachmentAction{
+		load_action: .clear
+		clear_value: gfx.Color{
 			r: 1.0
 			g: 1.0
 			b: 1.0
 			a: 1.0
 		}
 	}
-	mut pass_action := C.sg_pass_action{}
+	mut pass_action := gfx.PassAction{}
 	pass_action.colors[0] = color_action
 	state := &AppState{
 		pass_action: pass_action
-		fons: &C.FONScontext(0)
+		fons:        unsafe { nil } // &fontstash.Context(0)
 	}
 	title := 'V Metal/GL Text Rendering'
-	desc := C.sapp_desc{
-		user_data: state
-		init_userdata_cb: init
+	desc := sapp.Desc{
+		user_data:         state
+		init_userdata_cb:  init
 		frame_userdata_cb: frame
-		window_title: title.str
-		html5_canvas_name: title.str
-		width: 600
-		height: 700
-		high_dpi: true
+		window_title:      &char(title.str)
+		width:             600
+		height:            700
+		high_dpi:          true
 	}
 	sapp.run(&desc)
 }
 
-fn init(user_data voidptr) {
-	mut state := &AppState(user_data)
+fn init(mut state AppState) {
 	desc := sapp.create_desc()
 	gfx.setup(&desc)
-	s := &C.sgl_desc_t{}
-	C.sgl_setup(s)
+	s := &sgl.Desc{}
+	sgl.setup(s)
 	state.fons = sfons.create(512, 512, 1)
 	// or use DroidSerif-Regular.ttf
-	if bytes := os.read_bytes(os.resource_abs_path('../assets/fonts/RobotoMono-Regular.ttf')) {
-		println('loaded font: $bytes.len')
-		state.font_normal = C.fonsAddFontMem(state.fons, c'sans', bytes.data, bytes.len,
-			false)
+	if bytes := os.read_bytes(os.resource_abs_path(os.join_path('..', 'assets', 'fonts',
+		'RobotoMono-Regular.ttf')))
+	{
+		println('loaded font: ${bytes.len}')
+		state.font_normal = state.fons.add_font_mem('sans', bytes.clone(), true)
 	}
 }
 
-fn frame(user_data voidptr) {
-	t := time.ticks()
-	mut state := &AppState(user_data)
+fn frame(mut state AppState) {
 	state.render_font()
-	gfx.begin_default_pass(&state.pass_action, sapp.width(), sapp.height())
+	pass := sapp.create_default_pass(state.pass_action)
+	gfx.begin_pass(&pass)
 	sgl.draw()
 	gfx.end_pass()
 	gfx.commit()
-	println(time.ticks() - t)
 }
 
-const (
-	black = C.sfons_rgba(0, 0, 0, 255)
-)
+const black = sfons.rgba(0, 0, 0, 255)
 
 fn (mut state AppState) render_font() {
 	lh := 30
 	mut dy := lh
+	mut fons := state.fons
 	if !state.inited {
-		state.fons.clear_state()
+		fons.clear_state()
 		sgl.defaults()
 		sgl.matrix_mode_projection()
-		sgl.ortho(0.0, f32(C.sapp_width()), f32(C.sapp_height()), 0.0, -1.0, 1.0)
-		state.fons.set_font(state.font_normal)
-		state.fons.set_size(100.0)
-		C.fonsSetColor(state.fons, black)
-		C.fonsSetFont(state.fons, state.font_normal)
-		C.fonsSetSize(state.fons, 35.0)
+		sgl.ortho(0.0, f32(sapp.width()), f32(sapp.height()), 0.0, -1.0, 1.0)
+		fons.set_font(state.font_normal)
+		fons.set_size(100.0)
+		fons.set_color(black)
+		fons.set_font(state.font_normal)
+		fons.set_size(35.0)
 		state.inited = true
 	}
 
 	for line in lines {
-		C.fonsDrawText(state.fons, 40, dy, line.str, C.NULL)
+		fons.draw_text(40, dy, line)
 		dy += lh
 	}
-	C.sfons_flush(state.fons)
-}
-
-fn line(sx f32, sy f32, ex f32, ey f32) {
-	sgl.begin_lines()
-	sgl.c4b(255, 255, 0, 128)
-	sgl.v2f(sx, sy)
-	sgl.v2f(ex, ey)
-	sgl.end()
+	sfons.flush(fons)
 }
